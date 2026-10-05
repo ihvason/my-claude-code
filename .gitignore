@@ -1,0 +1,10 @@
+# uv / Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# API Key
+.env
+
+# macOS
+.DS_Store

@@ -1,0 +1,15 @@
+[project]
+name = "my-claude-code"
+version = "0.1.0"
+description = "A minimal terminal coding agent"
+readme = "README.md"
+requires-python = "==3.12.13"
+
+dependencies = [
+    "prompt-toolkit==3.0.53",
+    "pydantic-ai-slim[openai]==2.54.0",
+    "rich==15.0.0",
+]
+
+[tool.uv]
+package = false
