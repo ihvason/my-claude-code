@@ -1,12 +1,16 @@
+import asyncio
+
 from prompt_toolkit import PromptSession
+from pydantic_ai import Agent
+from pydantic_graph import End
 
 from agent import agent, MODEL_NAME, api_call_log
 from ui.commands import (
     COMMANDS,
     SessionState,
     console,
-    print_agent_steps,
     print_divider,
+    print_part,
     print_welcome_banner,
 )
 
@@ -60,9 +64,31 @@ def apply_result(state, result):
     state.input_tokens += usage.input_tokens
     state.output_tokens += usage.output_tokens
     state.last_api_calls = list(api_call_log)
-    # result.new_messages() already yields only this turn's messages, so there is
-    # no offset to track by hand
-    print_agent_steps(result.new_messages())
+
+
+async def run_agent_loop(user_input, state):
+    """
+    Expand agent.run_sync() to step through the agent loop node by node with real-time logging.
+    """
+    api_call_log.clear()
+
+    async with agent.iter(user_input, message_history=state.history) as run:
+        node = run.next_node
+
+        while not isinstance(node, End):
+            node = await run.next(node)
+
+            if Agent.is_call_tools_node(node):
+                for part in node.model_response.parts:
+                    print_part(part)
+
+            elif Agent.is_model_request_node(node):
+                for part in node.request.parts:
+                    if part.part_kind == "tool-return":
+                        print_part(part)
+
+    apply_result(state, run.result)
+    console.print()
 
 
 def main():
@@ -82,11 +108,7 @@ def main():
         if action == "continue":
             continue
 
-        # Clear the collection buffer first so that /api-detail reports the calls
-        # of this turn only
-        api_call_log.clear()
-        result = agent.run_sync(user_input, message_history=state.history)
-        apply_result(state, result)
+        asyncio.run(run_agent_loop(user_input, state))
 
 
 if __name__ == "__main__":
