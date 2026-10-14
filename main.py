@@ -1,8 +1,11 @@
 import asyncio
+import os
 
 from prompt_toolkit import PromptSession
 from pydantic_ai import Agent
 from pydantic_graph import End
+
+import session
 
 from agent import agent, MODEL_NAME, api_call_log
 from ui.commands import (
@@ -13,6 +16,8 @@ from ui.commands import (
     print_part,
     print_welcome_banner,
 )
+
+os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
 
 # PromptSession beats the builtin input(): it supports cursor movement for
 # editing, and remembers the input history of this run so you can scroll back
@@ -65,6 +70,9 @@ def apply_result(state, result):
     state.output_tokens += usage.output_tokens
     state.last_api_calls = list(api_call_log)
 
+    # Append this turn's new messages to the session file.
+    session.append_messages(state.session_id, result.new_messages())
+
 
 async def run_agent_loop(user_input, state):
     """
@@ -92,8 +100,11 @@ async def run_agent_loop(user_input, state):
 
 
 def main():
-    state = SessionState(model_name=MODEL_NAME)
-    print_welcome_banner("Coding Agent")
+    state = SessionState(
+        model_name=MODEL_NAME,
+        session_id=session.new_session_id(),
+    )
+    print_welcome_banner("my-claude-code")
 
     while True:
         user_input = read_user_input()

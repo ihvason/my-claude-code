@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import questionary
+import session
+
 from rich.markdown import Heading, Markdown
 from rich.markup import escape
 from rich.padding import Padding
@@ -34,6 +37,7 @@ class SessionState:
     input_tokens: int = 0
     output_tokens: int = 0
     model_name: str = ""
+    session_id: str = ""
     # every model API call triggered by the most recent round of user input
     last_api_calls: list = field(default_factory=list)
 
@@ -175,7 +179,66 @@ def cmd_new(state: SessionState) -> bool:
     state.input_tokens = 0
     state.output_tokens = 0
     state.last_api_calls.clear()
+    state.session_id = session.new_session_id()
     console.print("Started a new session\n")
+    return True
+
+
+def _summary_line(mtime, prompt: str) -> str:
+    """
+    Format a session display line: modification time + initial user prompt snippet.
+    """
+    prompt = " ".join(str(prompt).split())
+    if len(prompt) > 50:
+        prompt = prompt[:50] + "..."
+    return f"{mtime:%m-%d %H:%M}  {prompt}"
+
+
+def cmd_resume(state: SessionState) -> bool:
+    sessions = session.list_sessions()
+    if not sessions:
+        console.print("(No session history found for the current project)\n")
+        return True
+
+    choices = [
+        questionary.Choice(title=_summary_line(mtime, prompt), value=sid)
+        for sid, mtime, prompt in sessions
+    ]
+    # Append a cancellation option
+    choices.append(questionary.Choice(title="[Cancel and return]", value=None))
+
+    selected = questionary.select(
+        "Select a session to resume (Up/Down to navigate, Enter to confirm, Ctrl+C to cancel):",
+        choices=choices,
+        instruction=" ",
+    ).ask()
+
+    # User selected cancel or pressed Ctrl+C
+    if selected is None:
+        console.print("[dim](Session restoration canceled)[/]\n")
+        return True
+
+    # Restore session history
+    state.history = session.load_history(selected)
+    state.session_id = selected
+
+    # Aggregate token usage across restored responses
+    state.input_tokens = sum(
+        m.usage.input_tokens for m in state.history if m.kind == "response"
+    )
+    state.output_tokens = sum(
+        m.usage.output_tokens for m in state.history if m.kind == "response"
+    )
+    # Clear in-memory API call logs as they are ephemeral to the previous process
+    state.last_api_calls.clear()
+
+    # Replay conversation history to console
+    console.print(f"\nResumed session {selected[:8]} with {len(state.history)} message(s):\n")
+    for msg in state.history:
+        for part in msg.parts:
+            # Reuse the part rendering logic for replay
+            print_part(part)
+    console.print()
     return True
 
 
@@ -218,6 +281,7 @@ def cmd_api_detail(state: SessionState) -> bool:
 
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
+    "resume": Command("resume", "resume a history session", cmd_resume),
     "status": Command("status", "show the current session state", cmd_status),
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
