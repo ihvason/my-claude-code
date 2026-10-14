@@ -5,10 +5,17 @@ The main loop clears api_call_log before each run_sync and snapshots it into
 SessionState afterwards; the /api-detail command then shows the user every call
 made during that turn.
 """
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_ai.capabilities import Hooks
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+
+from ui.render import console
+
+
+MAX_RETRIES = 3
 
 
 @dataclass
@@ -69,3 +76,53 @@ async def _record_response(ctx, request_context, response):
         call.input_tokens = response.usage.input_tokens
         call.output_tokens = response.usage.output_tokens
     return response
+
+
+# ---------- API Request Retries ----------
+
+@hooks.on.model_request
+async def _retry_on_error(ctx, *, request_context, handler):
+    """
+    Wrap model requests with exponential backoff for retryable errors.
+
+    Retries are handled internally; conversation history and before/after hooks remain unaffected.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return await handler(request_context)
+        except ModelHTTPError as e:
+            if e.status_code < 500:
+                raise
+            if attempt >= MAX_RETRIES:
+                console.print(f"[bold red]✗ HTTP {e.status_code}: Failed after {MAX_RETRIES} retries[/]")
+                raise
+            wait = 2 ** attempt
+            console.print(
+                f"[bold yellow]⟳ HTTP {e.status_code}: Retrying in {wait}s "
+                f"({attempt + 1}/{MAX_RETRIES})...[/]"
+            )
+            await asyncio.sleep(wait)
+        except ModelAPIError as e:
+            if attempt >= MAX_RETRIES:
+                console.print(
+                    f"[bold red]✗ Connection failed: Unable to connect after {MAX_RETRIES} retries[/]"
+                )
+                raise
+            wait = 2 ** attempt
+            console.print(
+                f"[bold yellow]⟳ Connection failed: Retrying in {wait}s "
+                f"({attempt + 1}/{MAX_RETRIES})...[/]"
+            )
+            await asyncio.sleep(wait)
+
+
+# ---------- Tool Execution Fallback ----------
+
+@hooks.on.tool_execute_error
+async def _handle_tool_error(ctx, *, call, tool_def, args, error):
+    """
+    Catch unhandled tool exceptions and return the error message as a tool result
+    for the model to self-correct, preventing process crashes.
+    """
+    console.print(f"[bold red]✗ Tool {call.tool_name} failed: {error}[/]")
+    return f"Tool execution failed: {type(error).__name__}: {error}"

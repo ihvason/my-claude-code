@@ -23,8 +23,7 @@ model = OpenAIChatModel(
 
 agent = Agent(
     model,
-    # Deliberately kept in Chinese: the language of the prompt determines the
-    # language the model replies in. Translate this if you want English answers.
+    # System Prompt.
     instructions = (
     "You are a coding assistant capable of reading and writing files and executing shell commands to solve programming tasks.\n"
     "Workflow: Understand the requirements first, implement the code, and verify it by running tests or commands. "

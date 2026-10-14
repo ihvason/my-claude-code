@@ -108,7 +108,12 @@ def main():
         if action == "continue":
             continue
 
-        asyncio.run(run_agent_loop(user_input, state))
+        try:
+            asyncio.run(run_agent_loop(user_input, state))
+        except KeyboardInterrupt:
+            console.print("\n[bold yellow]Interrupted[/]\n")
+        except Exception as e:
+            console.print(f"\n[bold red]✗ {type(e).__name__}: {e}[/]\n")
 
 
 if __name__ == "__main__":
