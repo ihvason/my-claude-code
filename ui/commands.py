@@ -271,7 +271,12 @@ def _summary_line(mtime, prompt: str) -> str:
     return f"{mtime:%m-%d %H:%M}  {prompt}"
 
 
-def cmd_resume(state: SessionState) -> bool:
+async def cmd_resume(state: SessionState) -> bool:
+    """
+    List previous sessions for the current project and resume the selected conversation history.
+    Runs asynchronously within the REPL event loop; `in_terminal` yields terminal control
+    to questionary and restores the prompt bar upon completion.
+    """
     sessions = session.list_sessions()
     if not sessions:
         console.print("(No session history found for the current project)\n")
@@ -281,39 +286,39 @@ def cmd_resume(state: SessionState) -> bool:
         questionary.Choice(title=_summary_line(mtime, prompt), value=sid)
         for sid, mtime, prompt in sessions
     ]
-    # Append a cancellation option
-    choices.append(questionary.Choice(title="[Cancel and return]", value=None))
-
-    selected = questionary.select(
-        "Select a session to resume (Up/Down to navigate, Enter to confirm, Ctrl+C to cancel):",
-        choices=choices,
-        instruction=" ",
-    ).ask()
-
-    # User selected cancel or pressed Ctrl+C
+    async with in_terminal():
+        selected = await questionary.select(
+            "Select a session to resume (Up/Down to navigate, Enter to confirm):",
+            choices=choices,
+        ).ask_async()
+    # User canceled via Ctrl+C
     if selected is None:
-        console.print("[dim](Session restoration canceled)[/]\n")
         return True
 
-    # Restore session history
+    # Restore conversation history and switch session ID to append future messages to the original file
     state.history = session.load_history(selected)
     state.session_id = selected
+    # Clear session-scoped permission allowlist upon switching sessions
+    permissions.state.session_allowed.clear()
+    # Reset session-scoped ReadFileState. Files may have changed while the process was closed,
+    # invalidating previous mtimes; forcing a re-read before the first edit ensures consistency.
+    state.read_file_state = ReadFileState()
 
-    # Aggregate token usage across restored responses
+    # Recompute cumulative token usage from persisted response usages in jsonl
     state.input_tokens = sum(
         m.usage.input_tokens for m in state.history if m.kind == "response"
     )
     state.output_tokens = sum(
         m.usage.output_tokens for m in state.history if m.kind == "response"
     )
-    # Clear in-memory API call logs as they are ephemeral to the previous process
+    # Clear in-memory API call logs as they cannot be restored across processes
     state.last_api_calls.clear()
 
-    # Replay conversation history to console
+    # Replay restored conversation history to console
     console.print(f"\nResumed session {selected[:8]} with {len(state.history)} message(s):\n")
     for msg in state.history:
         for part in msg.parts:
-            # Reuse the part rendering logic for replay
+            # Replay shares identical part rendering logic with live output
             print_part(part)
     console.print()
     return True
