@@ -1,8 +1,15 @@
+"""
+CLI command handlers and terminal rendering utilities for the Coding Agent.
+
+Manages interactive session lifecycle (new, resume, exit, status), formatted
+console output with Rich, Markdown rendering overrides, and message step replay.
+"""
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import questionary
 import session
+import permissions
 
 from rich.markdown import Heading, Markdown
 from rich.markup import escape
@@ -180,6 +187,8 @@ def cmd_new(state: SessionState) -> bool:
     state.output_tokens = 0
     state.last_api_calls.clear()
     state.session_id = session.new_session_id()
+    # The permission allowlist is session-scoped; do not carry "always allow" choices into a new session
+    permissions.state.session_allowed.clear()
     console.print("Started a new session\n")
     return True
 
@@ -244,6 +253,7 @@ def cmd_resume(state: SessionState) -> bool:
 
 def cmd_status(state: SessionState) -> bool:
     console.print(f"Model:            {state.model_name}")
+    console.print(f"Permission mode:  {permissions.state.mode}")
     console.print(f"History messages: {len(state.history)}")
     console.print(f"Input tokens:     {state.input_tokens}")
     console.print(f"Output tokens:    {state.output_tokens}\n")

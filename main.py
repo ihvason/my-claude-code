@@ -1,3 +1,10 @@
+"""
+Main application entry point and event loop for the CLI agent.
+
+Initializes session state, coordinates the persistent REPL interface,
+dispatches slash commands, and steps through Pydantic AI agent graph nodes
+to stream thoughts, tool calls, and responses in real time.
+"""
 import asyncio
 import os
 
@@ -6,6 +13,8 @@ from pydantic_ai import Agent
 from pydantic_graph import End
 
 import session
+
+from ui.input_ui import Repl
 
 from agent import agent, MODEL_NAME, api_call_log
 from ui.commands import (
@@ -41,7 +50,7 @@ def read_user_input():
     return user_input
 
 
-def handle_command(user_input, state):
+async def handle_command(user_input, state):
     """
     Handle input that starts with "/".
     Returns 'pass' when this is not a command, so the main loop falls through and
@@ -56,7 +65,10 @@ def handle_command(user_input, state):
     if command is None:
         console.print(f"Unknown command: /{cmd_name}. Type /help to list commands.\n")
         return "continue"
-    return "continue" if command.handler(state) else "break"
+    result = command.handler(state)
+    if asyncio.iscoroutine(result):
+        result = await result
+    return "continue" if result else "break"
 
 
 def apply_result(state, result):
@@ -99,33 +111,37 @@ async def run_agent_loop(user_input, state):
     console.print()
 
 
-def main():
+async def main():
     state = SessionState(
         model_name=MODEL_NAME,
         session_id=session.new_session_id(),
     )
     print_welcome_banner("my-claude-code")
 
-    while True:
-        user_input = read_user_input()
-        if user_input is None:
-            break
-        if not user_input:
-            continue
+    # Persistent input bar: remains visible at the bottom throughout the session
+    repl = Repl(state)
 
-        action = handle_command(user_input, state)
+    async def on_submit(user_input):
+        # Triggered on each Enter submission
+        # Process slash commands first
+        action = await handle_command(user_input, state)
         if action == "break":
-            break
+            # Command requested exit: shut down the REPL
+            repl.exit()
+            return
         if action == "continue":
-            continue
+            return
 
-        try:
-            asyncio.run(run_agent_loop(user_input, state))
-        except KeyboardInterrupt:
-            console.print("\n[bold yellow]Interrupted[/]\n")
-        except Exception as e:
-            console.print(f"\n[bold red]✗ {type(e).__name__}: {e}[/]\n")
+        # Core agent loop: show 'Working...' on start, cleared on completion or interrupt;
+        # ESC / Ctrl+C interrupts execution midway
+        repl.start_working()
+        await run_agent_loop(user_input, state)
+
+    await repl.run(on_submit)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, EOFError):
+        pass

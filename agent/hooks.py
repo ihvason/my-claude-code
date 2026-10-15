@@ -14,6 +14,8 @@ from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 
 from ui.render import console
 
+import permissions
+
 
 MAX_RETRIES = 3
 
@@ -126,3 +128,34 @@ async def _handle_tool_error(ctx, *, call, tool_def, args, error):
     """
     console.print(f"[bold red]✗ Tool {call.tool_name} failed: {error}[/]")
     return f"Tool execution failed: {type(error).__name__}: {error}"
+
+
+# ---------- Tool Execution Permission Check ----------
+
+@hooks.on.tool_execute
+async def _check_permission(ctx, *, call, tool_def, args, handler):
+    """
+    Permission gate before tool execution.
+
+    Proceeds if allowed, prompts user for approval if required, and returns
+    a denial message as the tool result if rejected so the model can adjust.
+    """
+    decision = permissions.compute_decision(call.tool_name, args)
+    if decision == "allow":
+        # Authorized: execute the tool via handler
+        return await handler(args)
+
+    # decision == "ask": prompt user for approval
+    choice = await permissions.prompt_approval(call.tool_name, args)
+    if choice == "once":
+        return await handler(args)
+    if choice == "always":
+        # Add to session whitelist to bypass future prompts in this session
+        permissions.state.session_allowed.add(call.tool_name)
+        return await handler(args)
+
+    # Rejected: return denial message as tool output so the model pauses for user guidance
+    return (
+        f"Execution of {call.tool_name} was denied by the user. "
+        "Pause operations and await further instructions."
+    )
