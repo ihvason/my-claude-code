@@ -18,9 +18,11 @@ DEFAULT = "default"
 ACCEPT_EDITS = "acceptEdits"
 # bypass: Allows all tool calls without prompting
 BYPASS = "bypass"
+# auto: Delegates pending calls to an LLM classifier; allows safe actions and blocks risky ones
+AUTO = "auto"
 
 # Mode rotation order via Shift+Tab
-MODES = [DEFAULT, ACCEPT_EDITS, BYPASS]
+MODES = [DEFAULT, ACCEPT_EDITS, AUTO, BYPASS]
 
 # Read-only tools: Always allowed across all modes
 READONLY_TOOLS = {"read_file"}
@@ -72,8 +74,9 @@ def compute_decision(tool_name: str, args: dict) -> str:
     # Read-only tools are always allowed
     if tool_name in READONLY_TOOLS:
         return "allow"
-    # Allow file edits in acceptEdits mode
-    if state.mode == ACCEPT_EDITS and tool_name in EDIT_TOOLS:
+    # acceptEdits and auto modes: allow file edits; other tools proceed to subsequent checks.
+    # Included in auto mode as a fast path: file edits can be determined deterministically without calling the classifier.
+    if state.mode in (ACCEPT_EDITS, AUTO) and tool_name in EDIT_TOOLS:
         return "allow"
     # Default fallback: prompt user
     return "ask"
@@ -81,7 +84,7 @@ def compute_decision(tool_name: str, args: dict) -> str:
 
 def cycle_mode() -> str:
     """
-    Cycles mode through default -> acceptEdits -> bypass -> default.
+    Cycles mode through default -> acceptEdits -> auto -> bypass -> default.
     """
     index = MODES.index(state.mode)
     state.mode = MODES[(index + 1) % len(MODES)]

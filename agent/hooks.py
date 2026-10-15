@@ -12,9 +12,10 @@ from typing import Any
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 
-from ui.render import console
-
+import classifier
 import permissions
+
+from ui.render import console, print_step
 
 
 MAX_RETRIES = 3
@@ -137,24 +138,46 @@ async def _check_permission(ctx, *, call, tool_def, args, handler):
     """
     Permission gate before tool execution.
 
-    Proceeds if allowed, prompts user for approval if required, and returns
-    a denial message as the tool result if rejected so the model can adjust.
+    Proceeds if allowed, prompts for approval if required, and returns the denial
+    reason as the tool result if rejected so the model can self-correct.
+    In auto mode, pending calls are evaluated by an LLM classifier before prompting.
     """
     decision = permissions.compute_decision(call.tool_name, args)
     if decision == "allow":
         # Authorized: execute the tool via handler
         return await handler(args)
 
-    # decision == "ask": prompt user for approval
+    # In auto mode, delegate pending approvals to the LLM classifier
+    if permissions.state.mode == permissions.AUTO:
+        # Match step formatting (icon + label header, indented body) using blue for classifier status
+        print_step("[blue]◆ auto_check[/]", f"[blue dim]Evaluating {call.tool_name} via LLM...[/]")
+        verdict = await classifier.classify(ctx.messages, call.tool_name, args)
+
+        if verdict.get("error"):
+            # Fail-closed: fall back to manual approval on evaluation error
+            print_step("[yellow]⚠ auto_check[/]", f"[yellow]{verdict['reason']}[/]")
+        elif not verdict["should_block"]:
+            # Approved: execute tool and log reason for auditability
+            print_step("[blue]✔ auto_check[/]", f"[blue dim]Allowed: {verdict['reason']}[/]")
+            return await handler(args)
+        else:
+            # Blocked: return denial message with reason to model
+            print_step("[red]✘ auto_check[/]", f"[red]Blocked: {verdict['reason']}[/]")
+            return (
+                f"Security check blocked execution of {call.tool_name}. Reason: {verdict['reason']}. "
+                "Do not attempt to bypass this restriction. Pause operations and notify the user for guidance."
+            )
+
+    # Manual approval fallback (default/acceptEdits mode, or classifier errors in auto mode)
     choice = await permissions.prompt_approval(call.tool_name, args)
     if choice == "once":
         return await handler(args)
     if choice == "always":
-        # Add to session whitelist to bypass future prompts in this session
+        # Add to session allowlist to skip future prompts in this session
         permissions.state.session_allowed.add(call.tool_name)
         return await handler(args)
 
-    # Rejected: return denial message as tool output so the model pauses for user guidance
+    # Denied: return rejection notice as tool output so the model pauses for user guidance
     return (
         f"Execution of {call.tool_name} was denied by the user. "
         "Pause operations and await further instructions."
