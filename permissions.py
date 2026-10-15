@@ -27,7 +27,7 @@ MODES = [DEFAULT, ACCEPT_EDITS, AUTO, BYPASS]
 # Read-only tools: Always allowed across all modes
 READONLY_TOOLS = {"read_file"}
 # File modification tools: Auto-allowed in acceptEdits mode
-EDIT_TOOLS = {"write_file"}
+EDIT_TOOLS = {"write_file", "edit_file"}
 
 # Tool self-check registry: Evaluates arguments for fine-grained semantic risk control
 TOOL_SELF_CHECKS = {}

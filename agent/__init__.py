@@ -11,6 +11,7 @@ The submodules (tools / hooks / core) are implementation details and do not need
 to be imported directly.
 """
 from .core import agent, MODEL_NAME
+from .file_state import ReadFileState
 from .hooks import api_call_log, ApiCall
 
-__all__ = ["agent", "MODEL_NAME", "api_call_log", "ApiCall"]
+__all__ = ["agent", "MODEL_NAME", "api_call_log", "ApiCall", "ReadFileState"]

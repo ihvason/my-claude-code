@@ -21,7 +21,6 @@ from ui.commands import (
     COMMANDS,
     SessionState,
     console,
-    print_divider,
     print_part,
     print_welcome_banner,
 )
@@ -32,22 +31,6 @@ os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
 # editing, and remembers the input history of this run so you can scroll back
 # through it with the arrow keys.
 prompt_session = PromptSession()
-
-
-def read_user_input():
-    """
-    Print a top rule, read one line of input, then print a bottom rule so the
-    input keeps clear boundaries in the scrollback. Returns None when the user
-    wants to quit (Ctrl-C / Ctrl-D).
-    """
-    print_divider()
-    try:
-        user_input = prompt_session.prompt("❯ ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
-    print_divider()
-    return user_input
 
 
 async def handle_command(user_input, state):
@@ -92,7 +75,10 @@ async def run_agent_loop(user_input, state):
     """
     api_call_log.clear()
 
-    async with agent.iter(user_input, message_history=state.history) as run:
+    # Injects the session's ReadFileState instance into file tools via deps, accessible within tools through ctx.deps.
+    async with agent.iter(
+        user_input, message_history=state.history, deps=state.read_file_state
+    ) as run:
         node = run.next_node
 
         while not isinstance(node, End):
