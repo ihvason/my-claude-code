@@ -6,16 +6,20 @@ SessionState afterwards; the /api-detail command then shows the user every call
 made during that turn.
 """
 import asyncio
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 import classifier
 import permissions
-
 from ui.render import console, print_step
+
+from .file_state import ReadFileState
+from .reminders import build_reminder_text
 
 
 MAX_RETRIES = 3
@@ -182,3 +186,23 @@ async def _check_permission(ctx, *, call, tool_def, args, handler):
         f"Execution of {call.tool_name} was denied by the user. "
         "Pause operations and await further instructions."
     )
+
+
+# ---------- System-Reminder Injection ----------
+
+@hooks.on.before_model_request
+async def _inject_reminders(ctx, request_context):
+    """
+    Appends a system-reminder before each model request if any files in ReadFileState
+    were modified externally. Once re-read by the model, record() updates the timestamp
+    so subsequent hooks omit the reminder automatically.
+    """
+    state: ReadFileState = ctx.deps
+    text = build_reminder_text(state)
+    if text is None:
+        return request_context
+
+    reminder = ModelRequest(parts=[UserPromptPart(content=text)])
+    new_messages = list(request_context.messages) + [reminder]
+    print_step("[dim]◇ system[/]", f"[dim]{text[:200]}[/]")
+    return dataclasses.replace(request_context, messages=new_messages)

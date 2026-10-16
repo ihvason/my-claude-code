@@ -36,3 +36,21 @@ class ReadFileState:
         Retrieves the record for a given path; returns None if never read.
         """
         return self._state.get(os.path.abspath(path))
+
+
+    def stale_paths(self) -> list[str]:
+        """
+        Returns absolute paths of files whose disk mtime is newer than the recorded read time—
+        indicating modifications outside this process after they were read.
+        Internal edits via edit_file and write_file refresh the timestamp using record(),
+        excluding the model's own changes.
+        """
+        stale = []
+        for path, record in self._state.items():
+            # Skip files that may have been deleted without flagging them as modified
+            try:
+                if os.path.getmtime(path) > record["timestamp"]:
+                    stale.append(path)
+            except OSError:
+                continue
+        return stale

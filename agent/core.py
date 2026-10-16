@@ -2,14 +2,16 @@
 Agent instantiation: wires model / instructions / tools / hooks together.
 """
 import os
+import platform
+from datetime import date
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 
+from .file_state import ReadFileState
 from .hooks import hooks
 from .tools import TOOLS
-from .file_state import ReadFileState
 
 API_KEY = os.environ.get("API_KEY")
 if not API_KEY:
@@ -36,3 +38,32 @@ agent = Agent(
     deps_type=ReadFileState,
     capabilities=[hooks],
 )
+
+
+# Dynamic instructions: re-evaluated on each model request to inject environment context and project-level AGENTS.md.
+# Like static instructions, these are excluded from conversation history while delivering up-to-date values each turn,
+# remaining invisible to users without polluting context history.
+@agent.instructions
+def project_context() -> str:
+    cwd = os.getcwd()
+    parts = [
+        "Environment context:",
+        f"- Working directory: {cwd}",
+        f"- Operating system: {platform.system()}",
+        f"- Today's date: {date.today().isoformat()}",
+    ]
+
+    # Read project-level guidelines from AGENTS.md in the root directory; append if present to enforce project conventions
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(agents_md):
+        try:
+            content = open(agents_md, encoding="utf-8").read()
+        except OSError:
+            content = ""
+        if content.strip():
+            parts.append("")
+            parts.append("Project AGENTS.md guidelines (adhere to these conventions):")
+            parts.append(content)
+
+    return "\n".join(parts)
+
