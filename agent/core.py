@@ -9,7 +9,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 
-from .file_state import ReadFileState
+from .deps import AgentDeps
 from .hooks import hooks
 from .tools import TOOLS
 
@@ -38,7 +38,7 @@ agent = Agent(
     "Conversations may include <system-reminder>...</system-reminder> tags containing automatically injected system notices. Treat them strictly as system messages, not as part of the surrounding user input or tool output."
     ),
     tools=TOOLS,
-    deps_type=ReadFileState,
+    deps_type=AgentDeps,
     capabilities=[hooks],
 )
 
@@ -69,4 +69,3 @@ def project_context() -> str:
             parts.append(content)
 
     return "\n".join(parts)
-

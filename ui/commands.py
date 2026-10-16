@@ -17,6 +17,7 @@ from rich.padding import Padding
 import permissions
 import session
 from agent import ReadFileState
+from tasks_store import TasksStore
 from .render import console, print_step, print_welcome_banner
 
 
@@ -50,6 +51,8 @@ class SessionState:
     last_api_calls: list = field(default_factory=list)
     # Session-scoped ReadFileState injected into file tools; replaced with a fresh instance on session switch
     read_file_state: ReadFileState = field(default_factory=ReadFileState)
+    # Session TasksStore injected into task tools
+    tasks_store: TasksStore | None = None
 
 
 @dataclass

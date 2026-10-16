@@ -17,16 +17,22 @@ from . import shell as _shell  # noqa: F401
 from .ask_user import ask_user_question
 from .file import read_and_register, read_file, edit_file, write_file
 from .shell import run_command
+from .tasks import task_create, task_get, task_list, task_update
 
 # edit_file and write_file are marked sequential=True: multiple file edits in one
 # turn must run serially, otherwise they would write concurrently from the same
 # stale snapshot and overwrite each other (exactly the race that readFileState +
 # mtime exists to prevent)
+# Mark task_update with sequential=True: concurrent updates in a single turn risk lost updates due to stale snapshots (store lacks locking).
 TOOLS = [
     read_file,
     Tool(edit_file, sequential=True),
     Tool(write_file, sequential=True),
     run_command,
+    task_create,
+    task_list,
+    task_get,
+    Tool(task_update, sequential=True),
     ask_user_question,
 ]
 

@@ -87,7 +87,8 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
     """
     # 1. Deduplicate: recorded in readFileState, came from read_file (offset not
     # None), same range, same mtime -> skip
-    record = ctx.deps.get(path)
+    state = ctx.deps.read_file_state
+    record = state.get(path)
     if record is not None and record.get("offset") is not None:
         if record["offset"] == offset and record["limit"] == limit:
             try:
@@ -99,7 +100,7 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
     # 2. Reading and registration both go through read_and_register; translate
     # exceptions here into ModelRetry feedback for the model
     try:
-        return read_and_register(ctx.deps, path, offset, limit)
+        return read_and_register(state, path, offset, limit)
     except FileNotFoundError:
         raise ModelRetry(f"File {path} does not exist; verify the path or pick another file")
     except PermissionError:
@@ -131,7 +132,8 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
 
     # 2. Read before write: absent from readFileState means an edit was attempted
     # without reading, so send it back to read first
-    record = ctx.deps.get(path)
+    state = ctx.deps.read_file_state
+    record = state.get(path)
     if record is None:
         raise ModelRetry(f"{path} has not been read yet; use read_file first, then edit based on the real content")
 
@@ -173,7 +175,7 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
     # and mtime
     with open(path, "w", encoding="utf-8") as f:
         f.write(updated)
-    ctx.deps.record(path, updated)
+    state.record(path, updated)
     return f"Edited {path} ({count if replace_all else 1} replacement(s))"
 
 
@@ -186,8 +188,9 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
     """
     # Overwriting an existing file follows the same read-before-write rule as
     # edit_file, so unread content is never wiped out
+    state = ctx.deps.read_file_state
     if os.path.exists(path):
-        record = ctx.deps.get(path)
+        record = state.get(path)
         if record is None:
             raise ModelRetry(f"{path} already exists; read it with read_file first to confirm nothing is lost")
         if os.path.getmtime(path) > record["timestamp"]:
@@ -202,5 +205,5 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
     except OSError as e:
         return f"Error: failed to write {path} ({e})"
     # Newly written content is registered too, so later edits need not re-read it
-    ctx.deps.record(path, content)
+    state.record(path, content)
     return f"Wrote {path}"

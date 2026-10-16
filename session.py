@@ -10,14 +10,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_core import to_jsonable_python
 
-
-# Traverse upward to find the project root (or specify a relative path)
-def get_project_root() -> Path:
-    current = Path(__file__).resolve().parent
-    for parent in [current] + list(current.parents):
-        if (parent / ".git").exists() or (parent / "pyproject.toml").exists():
-            return parent
-    return current.parent  # Fallback
+from utils import get_project_root
 
 
 # Pin project root and storage directory

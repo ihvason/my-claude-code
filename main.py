@@ -13,6 +13,8 @@ from pydantic_graph import End
 
 import session
 from agent import agent, MODEL_NAME, api_call_log
+from agent.deps import AgentDeps
+from tasks_store import TasksStore
 from ui.commands import (
     COMMANDS,
     SessionState,
@@ -69,9 +71,13 @@ async def run_agent_loop(user_input, state):
     """
     api_call_log.clear()
 
-    # Injects the session's ReadFileState instance into file tools via deps, accessible within tools through ctx.deps.
+    # Bundles the session's readFileState and tasksStore into AgentDeps to inject into the tool layer, accessible via ctx.deps.* within tools.
+    deps = AgentDeps(
+        read_file_state=state.read_file_state,
+        tasks_store=state.tasks_store,
+    )
     async with agent.iter(
-        user_input, message_history=state.history, deps=state.read_file_state
+        user_input, message_history=state.history, deps=deps
     ) as run:
         node = run.next_node
 
@@ -113,9 +119,12 @@ def inject_at_mentions(user_input, state):
 
 
 async def main():
+    session_id = session.new_session_id()
+    tasks_store = TasksStore(session_id=session_id)
     state = SessionState(
         model_name=MODEL_NAME,
-        session_id=session.new_session_id(),
+        session_id=session_id,
+        tasks_store=tasks_store,
     )
     print_welcome_banner("my-claude-code")
 

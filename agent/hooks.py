@@ -1,9 +1,9 @@
 """
-Hooks attached to the Agent, used to capture metadata for every model API call.
-
-The main loop clears api_call_log before each run_sync and snapshots it into
-SessionState afterwards; the /api-detail command then shows the user every call
-made during that turn.
+Hooks attached to the Agent:
+1. API call metadata logging (used by the /api-detail command)
+2. system-reminder injection (appends stale file alerts and task reminders before each model request)
+3. Automatic retries on API request failures (wrap_model_request)
+4. Graceful fallback for unhandled tool execution errors (on_tool_execute_error)
 """
 import asyncio
 import dataclasses
@@ -12,48 +12,58 @@ from typing import Any
 
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
 import classifier
 import permissions
 from ui.render import console, print_step
 
-from .file_state import ReadFileState
-from .reminders import build_reminder_text
+from .reminders import build_reminder_text, build_task_reminder_text
 
 
 MAX_RETRIES = 3
+
+# Trigger thresholds for task reminders
+# Require >= this many turns since the last task_create / task_update call before prompting
+TASK_REMINDER_TURNS_SINCE_WRITE = 6
+# Require >= this many turns between task reminders to prevent spamming
+TASK_REMINDER_TURNS_BETWEEN = 4
+
+# Tools categorized as "task management" actions—invoking them resets the turns_since_write counter
+_TASK_MANAGEMENT_TOOLS = {"task_create", "task_update"}
 
 
 @dataclass
 class ApiCall:
     """
-    Metadata for a single model API call. before_model_request creates the record
-    and fills in the top half; after_model_request fills in the bottom half.
+    Metadata for a single model API call.
+    Request fields are populated by before_model_request; response fields by after_model_request.
     """
-    # request side
+    # Request side
     model: str
     messages_count: int
-    # the last part of the last message sent to the model in this call
+    # The final part of the last message sent to the model
     last_part: Any
     tools: list
-    # response side (filled in by the after hook)
+    # Response side (populated by after hook)
     finish_reason: str = ""
     parts_kinds: list = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
 
 
-# the main loop clears this before each run_sync
+# Cleared by the main loop before each agent.iter() turn
 api_call_log: list[ApiCall] = []
 
 hooks = Hooks()
 
 
+# ---------- API Call Logging ----------
+
 @hooks.on.before_model_request
 async def _record_request(ctx, request_context):
     """
-    Create an ApiCall record right before each model request goes out.
+    Creates an ApiCall record before dispatching each model invocation.
     """
     msgs = list(request_context.messages)
     last_part = msgs[-1].parts[-1] if msgs and msgs[-1].parts else None
@@ -71,10 +81,9 @@ async def _record_request(ctx, request_context):
 
 
 @hooks.on.after_model_request
-async def _record_response(ctx, request_context, response):
+async def _record_response(ctx, *, request_context, response):
     """
-    Fill in the response fields of the ApiCall created above, once the model call
-    has returned.
+    Populates response fields on the active ApiCall record upon completion.
     """
     if api_call_log:
         call = api_call_log[-1]
@@ -85,14 +94,93 @@ async def _record_response(ctx, request_context, response):
     return response
 
 
+# ---------- System-Reminder Injection ----------
+
+def _scan_task_turn_counters(messages) -> tuple[int, int]:
+    """
+    Performs a single reverse scan over history to compute:
+    (turns since last task management tool, turns since last task_reminder).
+    Exits early once both targets are found to minimize overhead on long histories.
+    """
+    since_mgmt = 0
+    since_reminder = 0
+    found_mgmt = False
+    found_reminder = False
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse):
+            if not found_mgmt:
+                for part in msg.parts:
+                    if isinstance(part, ToolCallPart) and part.tool_name in _TASK_MANAGEMENT_TOOLS:
+                        found_mgmt = True
+                        break
+                if not found_mgmt:
+                    since_mgmt += 1
+            if not found_reminder:
+                since_reminder += 1
+        elif isinstance(msg, ModelRequest) and not found_reminder:
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str) and _REMINDER_SENTINELS["task"] in part.content:
+                    found_reminder = True
+                    break
+        if found_mgmt and found_reminder:
+            break
+    return since_mgmt, since_reminder
+
+
+def _build_file_reminder(ctx, messages) -> str | None:
+    # Single-pass check for ReadFileState mutations; inspects state only, ignoring messages
+    return build_reminder_text(ctx.deps.read_file_state)
+
+
+def _build_task_reminder(ctx, messages) -> str | None:
+    # Trigger task reminder only when both thresholds are met: prolonged inactivity and sufficient interval
+    since_mgmt, since_reminder = _scan_task_turn_counters(messages)
+    if since_mgmt < TASK_REMINDER_TURNS_SINCE_WRITE:
+        return None
+    if since_reminder < TASK_REMINDER_TURNS_BETWEEN:
+        return None
+    return build_task_reminder_text(ctx.deps.tasks_store)
+
+
+# Registered reminder builders executed in before_model_request: (sentinel, builder) pairs.
+# Sentinels are used solely for reverse-scan identification (e.g., task reminders).
+_REMINDER_SENTINELS = {
+    # Task reminder sentinel matches the static phrase guaranteed by the reminder builder
+    "task": "The task tools haven't been used recently",
+}
+_REMINDER_BUILDERS = (_build_file_reminder, _build_task_reminder)
+
+
+@hooks.on.before_model_request
+async def _inject_reminders(ctx, request_context):
+    """
+    Executes each registered reminder builder sequentially, appending non-None results
+    to request_context.messages. Currently handles stale file notices (via ReadFileState)
+    and task reminders (via turn counters and TasksStore). New reminder types can be added
+    by registering a builder without altering hook plumbing.
+    """
+    messages = list(request_context.messages)
+    appended = []
+    for builder in _REMINDER_BUILDERS:
+        text = builder(ctx, messages + appended)
+        if text is None:
+            continue
+        appended.append(ModelRequest(parts=[UserPromptPart(content=text)]))
+        print_step("[dim]◇ system[/]", f"[dim]{text[:200]}[/]")
+    if not appended:
+        return request_context
+    return dataclasses.replace(request_context, messages=messages + appended)
+
+
 # ---------- API Request Retries ----------
 
 @hooks.on.model_request
 async def _retry_on_error(ctx, *, request_context, handler):
     """
-    Wrap model requests with exponential backoff for retryable errors.
+    Wraps model requests with exponential backoff retries on transient errors.
 
-    Retries are handled internally; conversation history and before/after hooks remain unaffected.
+    Retries are handled internally within the wrapper, leaving conversation history
+    and before/after hooks unaffected.
     """
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -101,108 +189,84 @@ async def _retry_on_error(ctx, *, request_context, handler):
             if e.status_code < 500:
                 raise
             if attempt >= MAX_RETRIES:
-                console.print(f"[bold red]✗ HTTP {e.status_code}: Failed after {MAX_RETRIES} retries[/]")
+                console.print(f"[bold red]✗ HTTP {e.status_code}: failed after {MAX_RETRIES} retries[/]")
                 raise
             wait = 2 ** attempt
             console.print(
-                f"[bold yellow]⟳ HTTP {e.status_code}: Retrying in {wait}s "
+                f"[bold yellow]⟳ HTTP {e.status_code}: retrying in {wait}s "
                 f"({attempt + 1}/{MAX_RETRIES})...[/]"
             )
             await asyncio.sleep(wait)
         except ModelAPIError as e:
             if attempt >= MAX_RETRIES:
                 console.print(
-                    f"[bold red]✗ Connection failed: Unable to connect after {MAX_RETRIES} retries[/]"
+                    f"[bold red]✗ Network connection failed after {MAX_RETRIES} retries[/]"
                 )
                 raise
             wait = 2 ** attempt
             console.print(
-                f"[bold yellow]⟳ Connection failed: Retrying in {wait}s "
+                f"[bold yellow]⟳ Network connection failed: retrying in {wait}s "
                 f"({attempt + 1}/{MAX_RETRIES})...[/]"
             )
             await asyncio.sleep(wait)
 
 
-# ---------- Tool Execution Fallback ----------
-
-@hooks.on.tool_execute_error
-async def _handle_tool_error(ctx, *, call, tool_def, args, error):
-    """
-    Catch unhandled tool exceptions and return the error message as a tool result
-    for the model to self-correct, preventing process crashes.
-    """
-    console.print(f"[bold red]✗ Tool {call.tool_name} failed: {error}[/]")
-    return f"Tool execution failed: {type(error).__name__}: {error}"
-
-
-# ---------- Tool Execution Permission Check ----------
+# ---------- Tool Execution Permission Checks ----------
 
 @hooks.on.tool_execute
 async def _check_permission(ctx, *, call, tool_def, args, handler):
     """
-    Permission gate before tool execution.
-
-    Proceeds if allowed, prompts for approval if required, and returns the denial
-    reason as the tool result if rejected so the model can self-correct.
-    In auto mode, pending calls are evaluated by an LLM classifier before prompting.
+    Permission gate before tool execution:
+    - 'allow': invokes handler to proceed with execution.
+    - 'ask': prompts user for approval.
+    - 'deny': returns refusal reason as tool output for self-correction.
+    In auto mode, 'ask' delegates decisions to an LLM classifier rather than prompting immediately.
     """
     decision = permissions.compute_decision(call.tool_name, args)
     if decision == "allow":
-        # Authorized: execute the tool via handler
+        # Approved: proceed with actual execution via handler(args)
         return await handler(args)
 
-    # In auto mode, delegate pending approvals to the LLM classifier
+    # decision == "ask" in AUTO mode: delegate decision-making to the classifier
     if permissions.state.mode == permissions.AUTO:
-        # Match step formatting (icon + label header, indented body) using blue for classifier status
-        print_step("[blue]◆ auto_check[/]", f"[blue dim]Evaluating {call.tool_name} via LLM...[/]")
+        # Align review status with thinking and tool_call visual styles: dedicated icon/label line with indented body
+        print_step("[blue]◆ auto_check[/]", f"[blue dim]Reviewing {call.tool_name} with classifier...[/]")
         verdict = await classifier.classify(ctx.messages, call.tool_name, args)
 
         if verdict.get("error"):
-            # Fail-closed: fall back to manual approval on evaluation error
+            # Fall back to interactive prompt on classifier failure; never allow on error
             print_step("[yellow]⚠ auto_check[/]", f"[yellow]{verdict['reason']}[/]")
         elif not verdict["should_block"]:
-            # Approved: execute tool and log reason for auditability
+            # Classified safe: allow execution and log rationale for auditability
             print_step("[blue]✔ auto_check[/]", f"[blue dim]Allowed: {verdict['reason']}[/]")
             return await handler(args)
         else:
-            # Blocked: return denial message with reason to model
+            # Classified hazardous: inject rejection notice back to the model with explanation
             print_step("[red]✘ auto_check[/]", f"[red]Blocked: {verdict['reason']}[/]")
             return (
-                f"Security check blocked execution of {call.tool_name}. Reason: {verdict['reason']}. "
-                "Do not attempt to bypass this restriction. Pause operations and notify the user for guidance."
+                f"Security check blocked {call.tool_name}; execution skipped. Reason: {verdict['reason']}. "
+                "Do not attempt to bypass this restriction. Stop and consult the user on how to proceed."
             )
 
-    # Manual approval fallback (default/acceptEdits mode, or classifier errors in auto mode)
+    # In default/acceptEdits mode, or as fallback on classifier failure in auto mode: prompt user
     choice = await permissions.prompt_approval(call.tool_name, args)
     if choice == "once":
         return await handler(args)
     if choice == "always":
-        # Add to session allowlist to skip future prompts in this session
+        # Add to session whitelist to suppress further prompts for this tool
         permissions.state.session_allowed.add(call.tool_name)
         return await handler(args)
 
-    # Denied: return rejection notice as tool output so the model pauses for user guidance
-    return (
-        f"Execution of {call.tool_name} was denied by the user. "
-        "Pause operations and await further instructions."
-    )
+    # Denied: skip execution and return refusal message to model so it pauses for user guidance
+    return f"User rejected execution of {call.tool_name}. Halt current operations and await user instructions."
 
 
-# ---------- System-Reminder Injection ----------
+# ---------- Tool Execution Error Handling ----------
 
-@hooks.on.before_model_request
-async def _inject_reminders(ctx, request_context):
+@hooks.on.tool_execute_error
+async def _handle_tool_error(ctx, *, call, tool_def, args, error):
     """
-    Appends a system-reminder before each model request if any files in ReadFileState
-    were modified externally. Once re-read by the model, record() updates the timestamp
-    so subsequent hooks omit the reminder automatically.
+    Prevents crash on unhandled tool exceptions; returns error output to the model for self-correction.
     """
-    state: ReadFileState = ctx.deps
-    text = build_reminder_text(state)
-    if text is None:
-        return request_context
-
-    reminder = ModelRequest(parts=[UserPromptPart(content=text)])
-    new_messages = list(request_context.messages) + [reminder]
-    print_step("[dim]◇ system[/]", f"[dim]{text[:200]}[/]")
-    return dataclasses.replace(request_context, messages=new_messages)
+    console.print(f"[bold red]✗ Tool {call.tool_name} failed: {error}[/]")
+    return f"Tool execution failed: {type(error).__name__}: {error}"

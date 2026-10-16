@@ -8,6 +8,7 @@ history, dynamic spinners, and cycling permission modes via Shift+Tab.
 import asyncio
 import re
 import time
+from html import escape as html_escape
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
@@ -29,10 +30,17 @@ from mentions import list_candidate_files
 from .render import console
 
 # Persistent input area: remains pinned to the bottom throughout the session.
-# Agent output streams above it via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.
+# Agent output streams above via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.
 
 # Animation frames for the working spinner
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# Row rendering templates for the task panel; keys correspond to task.status, and {s} represents the escaped subject
+_TASK_ROW_TEMPLATES = {
+    "completed": "  <ansigreen>✔</ansigreen> <s><ansibrightblack>{s}</ansibrightblack></s>",
+    "in_progress": "  <ansiyellow>▶</ansiyellow> <b>{s}</b>",
+    "pending": "  <ansibrightblack>☐ {s}</ansibrightblack>",
+}
 
 
 class AtFileCompleter(Completer):
@@ -77,6 +85,14 @@ class Repl:
     def _prompt_prefix(self, line_number, wrap_count):
         return HTML("<ansicyan>❯ </ansicyan>")
 
+    def _task_lines(self):
+        # Invoked on every spinner tick (~100ms); backed by an in-memory list() cache for zero render overhead
+        tasks = self.state.tasks_store.list()
+        if not tasks:
+            return HTML("")
+        rows = [_TASK_ROW_TEMPLATES[t.status].format(s=html_escape(t.subject)) for t in tasks]
+        return HTML("\n".join(rows))
+
     def _working_line(self):
         # Header above the input prompt: spinner + elapsed time + cancellation hint (active only during requests)
         frame = _SPINNER[self._frame % len(_SPINNER)]
@@ -93,12 +109,23 @@ class Repl:
         return Window(height=1, char="─", style="fg:ansibrightblack")
 
     def _build_app(self):
-        # Top-down layout: working indicator, divider, input bar, divider, permission mode footer
+        # Top-down layout: working indicator (active during requests), task panel (shown when tasks exist),
+        # divider, input bar, divider, permission mode footer
         body = HSplit(
             [
+                # Working indicator sits on top; task panel sits immediately below, stacked above the input divider
                 ConditionalContainer(
                     Window(FormattedTextControl(self._working_line), height=1),
                     filter=Condition(lambda: self.working),
+                ),
+                # Task panel adjusts dynamically to content height; collapses to 0 height when empty without manual toggling
+                ConditionalContainer(
+                    Window(
+                        FormattedTextControl(self._task_lines),
+                        height=Dimension(min=0),
+                        dont_extend_height=True,
+                    ),
+                    filter=Condition(lambda: len(self.state.tasks_store.list()) > 0),
                 ),
                 self._divider(),
                 # Input window matches content height; soft-wraps multi-line content

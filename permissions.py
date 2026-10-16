@@ -25,7 +25,7 @@ AUTO = "auto"
 MODES = [DEFAULT, ACCEPT_EDITS, AUTO, BYPASS]
 
 # Read-only tools: Always allowed across all modes
-READONLY_TOOLS = {"read_file", "ask_user_question"}
+READONLY_TOOLS = {"read_file", "ask_user_question", "task_create", "task_list", "task_get", "task_update"}
 # File modification tools: Auto-allowed in acceptEdits mode
 EDIT_TOOLS = {"write_file", "edit_file"}
 
