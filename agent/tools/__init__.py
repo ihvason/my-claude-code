@@ -1,0 +1,33 @@
+"""
+Tool subpackage, split by responsibility: file (read/write files) / shell (run
+commands) / ask_user (ask the user questions).
+
+External code only needs:
+- TOOLS: the tool list registered with the Agent
+- read_and_register: reused by mentions.py to inject @ references into the
+  conversation history disguised as read_file calls
+"""
+from pydantic_ai import Tool
+
+# Importing shell explicitly triggers its module-level
+# permissions.register_self_check side effect: the danger-pattern self-check for
+# run_command must be registered at import time, otherwise dangerous commands
+# would be auto-approved later in default mode
+from . import shell as _shell  # noqa: F401
+from .ask_user import ask_user_question
+from .file import read_and_register, read_file, edit_file, write_file
+from .shell import run_command
+
+# edit_file and write_file are marked sequential=True: multiple file edits in one
+# turn must run serially, otherwise they would write concurrently from the same
+# stale snapshot and overwrite each other (exactly the race that readFileState +
+# mtime exists to prevent)
+TOOLS = [
+    read_file,
+    Tool(edit_file, sequential=True),
+    Tool(write_file, sequential=True),
+    run_command,
+    ask_user_question,
+]
+
+__all__ = ["TOOLS", "read_and_register"]
