@@ -6,94 +6,124 @@ patch_stdout. Supports real-time execution cancellation (Esc / Ctrl+C), command
 history, dynamic spinners, and cycling permission modes via Shift+Tab.
 """
 import asyncio
+import re
 import time
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.markup import escape
 
 import permissions
+from mentions import list_candidate_files
 from .render import console
 
-# Persistent input bar: Anchored to the bottom throughout the session.
-# Agent output prints above via patch_stdout; pressing ESC / Ctrl+C interrupts running requests immediately.
+# Persistent input area: remains pinned to the bottom throughout the session.
+# Agent output streams above it via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.
 
-# Spinner animation frames for the working indicator
+# Animation frames for the working spinner
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+class AtFileCompleter(Completer):
+    """
+    Autocompletes @ file references: yields matching paths when typing an @token.
+    """
+    def get_completions(self, document, complete_event):
+        # Inspect text before cursor to capture active @token (non-whitespace following @)
+        match = re.search(r"@(\S*)$", document.text_before_cursor)
+        if match is None:
+            return
+        token = match.group(1).lower()
+        for path in list_candidate_files():
+            # Case-insensitive substring match
+            if token in path.lower():
+                # Negative start_position replaces the entered prefix with the full path upon selection
+                yield Completion(path, start_position=-len(match.group(1)))
+
+
 class Repl:
-    """
-    Persistent REPL bar; main loop injects an on_submit callback to handle input.
-    """
+    # Persistent input area; on_submit callback is injected by main to handle each input line
 
     def __init__(self, state):
         self.state = state
-        # Injected by main to process each line (slash command or dispatched to Agent)
+        # Injected by main: async handler for submitted input (slash commands or agent queries)
         self._on_submit = None
-        # Background task processing current input; target for ESC / Ctrl+C cancellation
+        # Background task handling current input; targets ESC / Ctrl+C cancellation. None when idle.
         self._task = None
-        # Model execution state; toggles visibility of the working indicator
+        # Tracks active model execution to toggle the working indicator
         self.working = False
         self._work_start = 0.0
         self._frame = 0
-        self._buffer = Buffer(multiline=False, history=InMemoryHistory())
+        # Configure input buffer with AtFileCompleter; complete_while_typing enables inline popups without Tab
+        self._buffer = Buffer(
+            multiline=False,
+            history=InMemoryHistory(),
+            completer=AtFileCompleter(),
+            complete_while_typing=True,
+        )
         self.app = self._build_app()
 
     def _prompt_prefix(self, line_number, wrap_count):
         return HTML("<ansicyan>❯ </ansicyan>")
 
     def _working_line(self):
-        # Header line: spinner + elapsed time + cancel hint (shown only during active requests)
+        # Header above the input prompt: spinner + elapsed time + cancellation hint (active only during requests)
         frame = _SPINNER[self._frame % len(_SPINNER)]
         elapsed = int(time.monotonic() - self._work_start)
-        return HTML(
-            f"<ansigreen>{frame}</ansigreen> <b>Working…</b>"
-            f"<ansibrightblack> ({elapsed}s elapsed · press esc to interrupt)</ansibrightblack>"
-        )
+        return HTML(f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · press esc to cancel)</ansibrightblack>")
 
     def _mode_line(self):
-        # Footer line: active permission mode + cycle hint
+        # Footer below the input prompt: active permission mode + keybinding hint
         mode = permissions.state.mode
-        return HTML(
-            f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta>"
-            f"<ansibrightblack> (Shift+Tab to cycle)</ansibrightblack>"
-        )
+        return HTML(f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta><ansibrightblack>(Shift+Tab to cycle)</ansibrightblack>")
 
     def _divider(self):
-        # Horizontal divider rule
+        # Horizontal divider
         return Window(height=1, char="─", style="fg:ansibrightblack")
 
     def _build_app(self):
-        # Vertical layout: working indicator, divider, input bar, divider, mode status
+        # Top-down layout: working indicator, divider, input bar, divider, permission mode footer
+        body = HSplit(
+            [
+                ConditionalContainer(
+                    Window(FormattedTextControl(self._working_line), height=1),
+                    filter=Condition(lambda: self.working),
+                ),
+                self._divider(),
+                # Input window matches content height; soft-wraps multi-line content
+                Window(
+                    BufferControl(buffer=self._buffer),
+                    get_line_prefix=self._prompt_prefix,
+                    height=Dimension(min=1),
+                    wrap_lines=True,
+                    dont_extend_height=True,
+                ),
+                self._divider(),
+                Window(FormattedTextControl(self._mode_line), height=1),
+            ]
+        )
+        # Wrap body in FloatContainer to overlay the cursor-following autocompletion menu
         layout = Layout(
-            HSplit(
-                [
-                    ConditionalContainer(
-                        Window(FormattedTextControl(self._working_line), height=1),
-                        filter=Condition(lambda: self.working),
+            FloatContainer(
+                content=body,
+                floats=[
+                    Float(
+                        xcursor=True,
+                        ycursor=True,
+                        content=CompletionsMenu(max_height=8, scroll_offset=1),
                     ),
-                    self._divider(),
-                    # Input line auto-wraps and dynamically sizes to content
-                    Window(
-                        BufferControl(buffer=self._buffer),
-                        get_line_prefix=self._prompt_prefix,
-                        height=Dimension(min=1),
-                        wrap_lines=True,
-                        dont_extend_height=True,
-                    ),
-                    self._divider(),
-                    Window(FormattedTextControl(self._mode_line), height=1),
-                ]
+                ],
             )
         )
         return Application(layout=layout, key_bindings=self._build_key_bindings())
@@ -107,7 +137,7 @@ class Repl:
 
         @kb.add("c-c")
         def _(event):
-            # Interrupt running agent loop if active; exit program if idle
+            # Cancel ongoing agent loop if active; exit program when idle
             if self._task is not None:
                 self._task.cancel()
             else:
@@ -115,7 +145,7 @@ class Repl:
 
         @kb.add("escape")
         def _(event):
-            # Interrupt running agent loop if active; clear buffer if idle
+            # Cancel ongoing request if active; clear buffer when idle
             if self._task is not None:
                 self._task.cancel()
             else:
@@ -123,35 +153,39 @@ class Repl:
 
         @kb.add("c-d")
         def _(event):
-            # Exit if idle and buffer is empty
+            # Exit when idle and input is empty
             if self._task is None and not self._buffer.text:
                 event.app.exit()
 
         @kb.add("s-tab")
         def _(event):
-            # Cycle permission mode
+            # Cycle through permission modes
             permissions.cycle_mode()
 
         return kb
 
     def _on_enter(self):
-        # Reject new submissions while a request is in progress
+        # Accept highlighted completion if menu is open instead of submitting
+        if self._buffer.complete_state and self._buffer.complete_state.current_completion:
+            self._buffer.apply_completion(self._buffer.complete_state.current_completion)
+            return
+        # Block submissions while a request is in flight (prompt remains visible)
         if self._task is not None:
             return
         text = self._buffer.text.strip()
         if not text:
             self._buffer.reset()
             return
-        # Append to history and clear input buffer
+        # Record into history and clear input prompt
         self._buffer.history.append_string(text)
         self._buffer.reset()
-        # Echo submitted line to the scrollable output history above
+        # Echo submitted text to scrollable output area to preserve history
         self._echo_input(text)
-        # Dispatch execution to background task to keep UI responsive and interruptible
+        # Dispatch to a background task so Enter returns immediately, allowing continuous UI render and cancellation
         self._task = self.app.create_background_task(self._process(text))
 
     def _echo_input(self, text):
-        # Render submitted prompt framed with rules matching the input bar style
+        # Echo submitted input framed by horizontal rules to mirror the prompt styling
         rule = "─" * console.width
         console.print(f"[bright_black]{rule}[/]")
         console.print(f"[cyan]❯[/] {escape(text)}")
@@ -159,7 +193,7 @@ class Repl:
         console.print()
 
     async def _process(self, text):
-        # Background task handling on_submit, exceptions, and cancellations
+        # Background task: delegates to on_submit, handling cancellation and runtime exceptions
         try:
             await self._on_submit(text)
         except asyncio.CancelledError:
@@ -172,22 +206,22 @@ class Repl:
             self.app.invalidate()
 
     def start_working(self):
-        # Enter working state, triggering indicator display
+        # Set working state to display spinner; cleared in _process.finally on completion or cancellation
         self.working = True
         self._work_start = time.monotonic()
         self.app.invalidate()
 
     def exit(self):
-        # Terminate REPL loop (used by /exit)
+        # Shut down persistent input area (used by /exit)
         self.app.exit()
 
     async def run(self, on_submit):
-        # Run REPL until exit; on_submit is an async handler for input lines
+        # Run REPL event loop until exited; on_submit is the async handler for input lines
         self._on_submit = on_submit
-        # Spinner tick loop to invalidate and redraw UI during execution
+        # Heartbeat loop for spinner re-rendering during active requests
         ticker = asyncio.ensure_future(self._tick())
         try:
-            # patch_stdout ensures rich output prints above the persistent input bar
+            # patch_stdout routes Rich logs above the persistent input prompt without overwriting it
             with patch_stdout(raw=True):
                 await self.app.run_async()
         finally:

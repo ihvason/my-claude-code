@@ -36,6 +36,37 @@ def _with_line_numbers(content: str, start_line: int = 1) -> str:
     return "\n".join(f"{i:>{width}}\t{line}" for i, line in enumerate(lines, start_line))
 
 
+def read_and_register(state: ReadFileState, path: str, offset: int = 1, limit: int | None = None) -> str:
+    """
+    Reads a file, slices it by offset/limit, registers it in ReadFileState, and returns line-numbered content.
+    Invoked by both the read_file tool and @ mention injections, ensuring files introduced via @
+    and files read autonomously by the model share identical representations in ReadFileState.
+    """
+    # 1. Read full file content
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 2. Slice by offset/limit: default to DEFAULT_MAX_LINES if limit is omitted
+    all_lines = content.splitlines()
+    total = len(all_lines)
+    start = offset - 1
+    if start >= total and total > 0:
+        return f"Warning: File contains only {total} lines, but offset is {offset}. No content to read."
+    end = start + limit if limit is not None else start + DEFAULT_MAX_LINES
+    selected = all_lines[start:end]
+    selected_content = "\n".join(selected)
+    truncated = limit is None and end < total
+
+    # 3. Register in session ReadFileState: cache raw sliced content (without line numbers) and current mtime
+    state.record(path, selected_content, offset=offset, limit=limit)
+
+    # 4. Return line-numbered content; append continuation hint if truncated
+    result = _with_line_numbers(selected_content, start_line=offset)
+    if truncated:
+        result += f"\n\n(File has {total} lines total; {total - end} lines remaining. Use offset={end + 1} to continue reading.)"
+    return result
+
+
 def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit: int | None = None) -> str:
     """
     Read file contents with line numbers (similar to `cat -n`).
@@ -57,10 +88,9 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
             except FileNotFoundError:
                 pass
 
-    # 2. Read raw file content
+    # 2. Reading and registration delegated to read_and_register; exceptions are mapped to ModelRetry
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+        return read_and_register(ctx.deps, path, offset, limit)
     except FileNotFoundError:
         raise ModelRetry(f"File not found: {path}. Verify the path or specify another file.")
     except PermissionError:
@@ -69,26 +99,6 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
         raise ModelRetry(f"{path} is a directory. Specify a specific file inside it.")
     except UnicodeDecodeError:
         return f"Error: {path} is not a text file and cannot be read."
-
-    # 3. Slice by offset/limit: default to DEFAULT_MAX_LINES if limit is omitted
-    all_lines = content.splitlines()
-    total = len(all_lines)
-    start = offset - 1
-    if start >= total and total > 0:
-        return f"Warning: File contains only {total} lines, but offset is {offset}. No content to read."
-    end = start + limit if limit is not None else start + DEFAULT_MAX_LINES
-    selected = all_lines[start:end]
-    selected_content = "\n".join(selected)
-    truncated = limit is None and end < total
-
-    # 4. Cache sliced raw content (without line numbers) and current mtime in session ReadFileState
-    ctx.deps.record(path, selected_content, offset=offset, limit=limit)
-
-    # 5. Return formatted content with line numbers; append continuation notice if truncated
-    result = _with_line_numbers(selected_content, start_line=offset)
-    if truncated:
-        result += f"\n\n(File has {total} lines total; {total - end} lines remaining. Use offset={end + 1} to continue reading.)"
-    return result
 
 
 def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:

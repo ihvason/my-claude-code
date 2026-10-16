@@ -8,14 +8,10 @@ to stream thoughts, tool calls, and responses in real time.
 import asyncio
 import os
 
-from prompt_toolkit import PromptSession
 from pydantic_ai import Agent
 from pydantic_graph import End
 
 import session
-
-from ui.input_ui import Repl
-
 from agent import agent, MODEL_NAME, api_call_log
 from ui.commands import (
     COMMANDS,
@@ -24,13 +20,11 @@ from ui.commands import (
     print_part,
     print_welcome_banner,
 )
+from ui.input_ui import Repl
+from mentions import build_mention_messages, extract_at_mentions
+
 
 os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
-
-# PromptSession beats the builtin input(): it supports cursor movement for
-# editing, and remembers the input history of this run so you can scroll back
-# through it with the arrow keys.
-prompt_session = PromptSession()
 
 
 async def handle_command(user_input, state):
@@ -97,6 +91,27 @@ async def run_agent_loop(user_input, state):
     console.print()
 
 
+def inject_at_mentions(user_input, state):
+    """
+    Parses @path references in user input and injects mock read_file tool invocations
+    into the conversation history before running the agent.
+    """
+    paths = extract_at_mentions(user_input)
+    if not paths:
+        return
+    mention_messages = build_mention_messages(paths, state.read_file_state)
+    if not mention_messages:
+        return
+    # Inject into history so the model perceives the files as already read
+    state.history += mention_messages
+    # Persist injected files to allow restoration via /resume
+    session.append_messages(state.session_id, mention_messages)
+    # Echo injected files to the terminal to confirm the @ reference took effect
+    for msg in mention_messages:
+        for part in msg.parts:
+            print_part(part)
+
+
 async def main():
     state = SessionState(
         model_name=MODEL_NAME,
@@ -117,6 +132,9 @@ async def main():
             return
         if action == "continue":
             return
+
+        # Parse @ mentions and inject referenced files as mock read_file calls into history
+        inject_at_mentions(user_input, state)
 
         # Core agent loop: show 'Working...' on start, cleared on completion or interrupt;
         # ESC / Ctrl+C interrupts execution midway
