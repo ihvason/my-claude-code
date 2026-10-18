@@ -10,6 +10,8 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 
+from memory import store
+
 
 # Permission modes
 # default: Requires approval for file writes and shell commands; auto-allows read-only operations
@@ -73,6 +75,11 @@ def compute_decision(tool_name: str, args: dict) -> str:
         return "allow"
     # Read-only tools are always allowed
     if tool_name in READONLY_TOOLS:
+        return "allow"
+    # Auto-allow writes into the memory directory: that is the agent's own data
+    # directory, it never touches the user's project or system state, and prompting
+    # would only interrupt the automatic accumulation of memory
+    if tool_name in EDIT_TOOLS and store.is_memory_path(str(args.get("path", ""))):
         return "allow"
     # acceptEdits and auto modes: allow file edits; other tools proceed to subsequent checks.
     # Included in auto mode as a fast path: file edits can be determined deterministically without calling the classifier.

@@ -10,12 +10,11 @@ from pathlib import Path
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_core import to_jsonable_python
 
-from utils import get_project_root
+from utils import get_project_dir
 
 
-# Pin project root and storage directory
-PROJECT_ROOT = get_project_root()
-STORAGE_DIR = PROJECT_ROOT / ".my-claude-code" / "sessions"
+# Per-project storage directory, isolated by working directory
+STORAGE_DIR = get_project_dir() / "sessions"
 
 
 def new_session_id() -> str:
@@ -56,21 +55,24 @@ def load_history(session_id: str) -> list:
 
 def first_prompt(path: Path) -> str:
     """
-    Read only the first line of the file and extract the initial user input as the session summary.
+    Finds the first genuine user prompt from the beginning of the file to serve as the session summary.
+    Recalled memories and @ mentions may precede it, so skip system-reminder content and read 
+    additional lines as needed.
     """
-    try:
-        with open(path, encoding="utf-8") as f:
-            head = f.readline().strip()
-        if not head:
-            return "(Empty session)"
-            
-        msg = json.loads(head)
-        for part in msg.get("parts", []):
-            if part.get("part_kind") == "user-prompt":
-                return str(part.get("content", ""))
-    except Exception:
-        return "(Corrupted format)"
-    return "(Empty session)"
+    with open(path, encoding="utf-8") as f:
+        for _ in range(20):
+            line = f.readline()
+            if not line:
+                break
+            msg = json.loads(line)
+            for part in msg.get("parts", []):
+                if part.get("part_kind") != "user-prompt":
+                    continue
+                content = str(part.get("content", ""))
+                if content.startswith("<system-reminder>"):
+                    continue
+                return content
+    return "(empty session)"
 
 
 def list_sessions() -> list:

@@ -15,6 +15,7 @@ import session
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from tasks_store import TasksStore
+from memory import background, recall, store
 from ui.commands import (
     COMMANDS,
     SessionState,
@@ -95,6 +96,7 @@ async def run_agent_loop(user_input, state):
 
     apply_result(state, run.result)
     console.print()
+    return run.result
 
 
 def inject_at_mentions(user_input, state):
@@ -120,6 +122,9 @@ def inject_at_mentions(user_input, state):
 
 async def main():
     session_id = session.new_session_id()
+    # Create the memory directory at startup: the system prompt promises it already
+    # exists, so the model need not waste a turn confirming it.
+    store.ensure_memory_dir()
     tasks_store = TasksStore(session_id=session_id)
     state = SessionState(
         model_name=MODEL_NAME,
@@ -148,9 +153,20 @@ async def main():
         # Core agent loop: show 'Working...' on start, cleared on completion or interrupt;
         # ESC / Ctrl+C interrupts execution midway
         repl.start_working()
-        await run_agent_loop(user_input, state)
+
+        # Recall relevant memories into the history so the model builds on what it
+        # has learned before handling this input
+        await recall.inject_memories(user_input, state)
+        result = await run_agent_loop(user_input, state)
+        # After the turn, extract memories in the background and check whether
+        # periodic consolidation is due
+        background.schedule(state, result.new_messages())
 
     await repl.run(on_submit)
+
+    # Before exiting, give in-flight background memory tasks time to finish;
+    # killing extraction midway leaves half-written memories behind
+    await background.drain()
 
 
 if __name__ == "__main__":

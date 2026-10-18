@@ -1,6 +1,6 @@
 """
 Task persistence layer: each task is stored as an individual JSON file under
-<project_root>/.my-claude-code/tasks/<session_id>/<id>.json.
+<project_root>/.my-claude-code/projects/<project>/tasks/<session_id>/<id>.json.
 A .highwatermark file tracks the highest allocated task ID to prevent ID reuse after deletions.
 
 All state is loaded into memory once during __init__; mutations synchronously flush to disk
@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterator, Literal
 
-from utils import get_project_root
+from utils import get_project_dir
 
 
 # Only these three statuses are persisted to disk; 'deleted' is a pseudo-status signal during update that triggers deletion instead of serialization.
@@ -38,10 +38,6 @@ class Task:
 _HIGHWATERMARK = ".highwatermark"
 
 
-def _data_root() -> Path:
-    return get_project_root() / ".my-claude-code"
-
-
 class TasksStore:
     """
     Session-isolated, file-backed task store providing create, list, get, update, and delete operations.
@@ -50,7 +46,7 @@ class TasksStore:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self.dir = _data_root() / "tasks" / session_id
+        self.dir = get_project_dir() / "tasks" / session_id
         self.dir.mkdir(parents=True, exist_ok=True)
         # Populate in-memory cache from disk once during initialization; subsequent read/write operations update memory and flush to disk synchronously.
         self._tasks: dict[str, Task] = {}

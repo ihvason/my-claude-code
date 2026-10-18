@@ -5,6 +5,7 @@ Dependency-free and kept at the project root so that both the top-level modules
 (session.py, tasks_store.py) and the agent/ package can import it without
 creating an import cycle.
 """
+import re
 from functools import cache
 from pathlib import Path
 
@@ -39,3 +40,34 @@ def get_project_root(start: str | Path | None = None) -> Path:
         if any((candidate / marker).exists() for marker in ROOT_MARKERS):
             return candidate
     return base
+
+
+def encode_project_path(path: str | Path) -> str:
+    """
+    Encode an absolute path into a single filesystem-safe directory name.
+
+    Flattens the path with dashes, mirroring the Claude Code convention:
+    /Users/quentin/work/foo -> -Users-quentin-work-foo
+    """
+    return re.sub(r"[^A-Za-z0-9_-]", "-", str(Path(path).resolve()))
+
+
+@cache
+def get_data_dir() -> Path:
+    """
+    Root of this application's on-disk data: <project root>/.my-claude-code.
+    """
+    return get_project_root() / ".my-claude-code"
+
+
+@cache
+def get_project_dir() -> Path:
+    """
+    Data directory for the project currently being worked on:
+    <data dir>/projects/<encoded project root>.
+
+    The project root is discovered by walking up from the working directory, so
+    starting the app from a subdirectory still maps to the same project and does
+    not fork a separate data namespace.
+    """
+    return get_data_dir() / "projects" / encode_project_path(get_project_root(Path.cwd()))

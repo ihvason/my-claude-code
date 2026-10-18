@@ -18,6 +18,7 @@ import permissions
 import session
 from agent import ReadFileState
 from tasks_store import TasksStore
+from memory import background, store
 from .render import console, print_step, print_welcome_banner
 
 
@@ -53,6 +54,8 @@ class SessionState:
     read_file_state: ReadFileState = field(default_factory=ReadFileState)
     # Session TasksStore injected into task tools
     tasks_store: TasksStore | None = None
+    # Memory filenames already recalled and injected in this session; prevents duplicate injections
+    surfaced_memories: set = field(default_factory=set)
 
 
 @dataclass
@@ -250,17 +253,22 @@ def cmd_help(state: SessionState) -> bool:
 
 def cmd_new(state: SessionState) -> bool:
     """
-    Start a new session: clear the history, the token counters and the API call
-    records.
+    Starts a new session: clears history, token counters, API call logs, and assigns a new session ID.
     """
     state.history.clear()
     state.input_tokens = 0
     state.output_tokens = 0
     state.last_api_calls.clear()
     state.session_id = session.new_session_id()
-    # The permission allowlist is session-scoped; do not carry "always allow" choices into a new session
+    # Permission whitelists are session-scoped; 'always allow' choices do not carry over to new sessions
     permissions.state.session_allowed.clear()
-    console.print("Started a new session\n")
+    # ReadFileState is session-scoped; resets to empty so cached files do not carry over
+    state.read_file_state = ReadFileState()
+    # TasksStore is isolated per session (~/.my-claude-code/tasks/<session_id>/); instantiating a new store updates the TUI task panel on the next redraw
+    state.tasks_store = TasksStore(session_id=state.session_id)
+    # Recall deduplication set is session-scoped; allows past memories to be surfaced again in the new session
+    state.surfaced_memories = set()
+    console.print("Started new session\n")
     return True
 
 
@@ -276,9 +284,9 @@ def _summary_line(mtime, prompt: str) -> str:
 
 async def cmd_resume(state: SessionState) -> bool:
     """
-    List previous sessions for the current project and resume the selected conversation history.
-    Runs asynchronously within the REPL event loop; `in_terminal` yields terminal control
-    to questionary and restores the prompt bar upon completion.
+    Lists historical sessions for the current project and restores conversation history upon selection.
+    Runs asynchronously within the REPL event loop: in_terminal yields the terminal to questionary,
+    restoring the prompt upon completion.
     """
     sessions = session.list_sessions()
     if not sessions:
@@ -291,37 +299,40 @@ async def cmd_resume(state: SessionState) -> bool:
     ]
     async with in_terminal():
         selected = await questionary.select(
-            "Select a session to resume (Up/Down to navigate, Enter to confirm):",
+            "Select a session to resume (arrow keys to navigate, Enter to confirm):",
             choices=choices,
         ).ask_async()
-    # User canceled via Ctrl+C
+    # Selection cancelled via Ctrl+C
     if selected is None:
         return True
 
-    # Restore conversation history and switch session ID to append future messages to the original file
+    # Restore conversation history and point session ID to the chosen past session so subsequent messages append to the same file
     state.history = session.load_history(selected)
     state.session_id = selected
-    # Clear session-scoped permission allowlist upon switching sessions
+    # Permission whitelist is session-scoped; clear upon switching sessions
     permissions.state.session_allowed.clear()
-    # Reset session-scoped ReadFileState. Files may have changed while the process was closed,
-    # invalidating previous mtimes; forcing a re-read before the first edit ensures consistency.
+    # ReadFileState is session-scoped; replace with a clean instance. Although read history exists in transcripts, file mtimes on disk may have changed since exit; requiring a re-read on initial edit ensures consistency
     state.read_file_state = ReadFileState()
+    # Point TasksStore to the resumed session directory to reconnect disk-backed tasks (each stored as standalone JSON)
+    state.tasks_store = TasksStore(session_id=state.session_id)
+    # Reset recall deduplication set; previously surfaced memories may be recalled once more without significant downside
+    state.surfaced_memories = set()
 
-    # Recompute cumulative token usage from persisted response usages in jsonl
+    # Recompute cumulative token usage from per-response usage entries in jsonl
     state.input_tokens = sum(
         m.usage.input_tokens for m in state.history if m.kind == "response"
     )
     state.output_tokens = sum(
         m.usage.output_tokens for m in state.history if m.kind == "response"
     )
-    # Clear in-memory API call logs as they cannot be restored across processes
+    # Clear in-memory API call logs since they cannot be reconstructed from disk
     state.last_api_calls.clear()
 
-    # Replay restored conversation history to console
-    console.print(f"\nResumed session {selected[:8]} with {len(state.history)} message(s):\n")
+    # Replay restored conversation transcript to the terminal
+    console.print(f"\nResumed session {selected[:8]} ({len(state.history)} messages):\n")
     for msg in state.history:
         for part in msg.parts:
-            # Replay shares identical part rendering logic with live output
+            # Replay shares identical rendering logic with live streaming
             print_part(part)
     console.print()
     return True
@@ -365,6 +376,41 @@ def cmd_api_detail(state: SessionState) -> bool:
     return True
 
 
+def cmd_memory(state: SessionState) -> bool:
+    """
+    Displays the memory directory, all memory files, and the MEMORY.md index.
+    """
+    console.print(f"Memory directory: {store.memory_dir()}\n")
+    headers = store.scan_memory_files()
+    if not headers:
+        console.print("(No memories accumulated yet; memories build up across conversations)\n")
+        return True
+    for h in headers:
+        age = store.age_text(store.age_days(h.mtime))
+        console.print(escape(f"  [{h.type or '?'}] {h.filename} ({age})"))
+        console.print(f"      [dim]{escape(h.description)}[/]")
+    console.print()
+    index = store.read_index()
+    if index:
+        console.print("MEMORY.md Index:")
+        console.print(Padding(Markdown(index), (0, 0, 0, 2)))
+        console.print()
+    return True
+
+
+async def cmd_dream(state: SessionState) -> bool:
+    """
+    Manually triggers memory consolidation and sleep phase, bypassing automated gates for immediate testing.
+    """
+    console.print("Consolidating memories, this may take a moment...\n")
+    try:
+        await background.dream(list(state.history), force=True, session_id=state.session_id)
+    except Exception as e:
+        console.print(f"[red]Consolidation failed: {type(e).__name__}: {e}[/]\n")
+    console.print()
+    return True
+
+
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
     "resume": Command("resume", "resume a history session", cmd_resume),
@@ -372,4 +418,6 @@ COMMANDS = {
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
     "exit": Command("exit", "quit the program", cmd_exit),
+    "memory": Command("memory", "inspect long-term memories", cmd_memory),
+    "dream": Command("dream", "consolidate and compact long-term memories now", cmd_dream),
 }
