@@ -238,6 +238,13 @@ class Repl:
         self._work_start = time.monotonic()
         self.app.invalidate()
 
+    def prefill(self, text: str) -> None:
+        # Put text back into the input buffer with the cursor at the end, ready to edit
+        # and resend; used after /rewind rolls the conversation back
+        self._buffer.text = text
+        self._buffer.cursor_position = len(text)
+        self.app.invalidate()
+
     def exit(self):
         # Shut down persistent input area (used by /exit)
         self.app.exit()

@@ -54,3 +54,10 @@ class ReadFileState:
             except OSError:
                 continue
         return stale
+
+
+    def paths(self) -> list[str]:
+        """
+        All recorded absolute paths, in first-read order.
+        """
+        return list(self._state)

@@ -8,8 +8,11 @@ from tasks_store import TasksStore
 
 from .file_state import ReadFileState
 
+from file_history import FileHistory
+
 
 @dataclass
 class AgentDeps:
     read_file_state: ReadFileState
     tasks_store: TasksStore
+    file_history: FileHistory | None = None

@@ -5,6 +5,7 @@ supporting session scanning and restoration.
 import json
 import uuid
 from datetime import datetime
+import shutil
 from pathlib import Path
 
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -91,3 +92,33 @@ def list_sessions() -> list:
         (p.stem, datetime.fromtimestamp(p.stat().st_mtime), first_prompt(p))
         for p in files
     ]
+
+
+def rewrite_messages(session_id: str, messages) -> None:
+    """
+    Rewrite the session file wholesale from the in-memory conversation history; used
+    to persist after /rewind truncates the conversation.
+    The full rewrite treats memory as the source of truth and does not rely on disk
+    lines lining up one-to-one with in-memory entries.
+    """
+    path = session_file(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for msg in messages:
+            f.write(json.dumps(to_jsonable_python(msg), ensure_ascii=False) + "\n")
+
+
+def archive_session(session_id: str) -> Path:
+    """
+    Archive before compaction rewrites the session file: copy the current session
+    file into the compact-history/ subdirectory and return the archive path.
+    The archive keeps the full pre-compaction transcript so the model can read it
+    back when the summary lacks detail.
+    The subdirectory keeps archives out of list_sessions()'s *.jsonl scan, so they
+    never appear in the /resume list.
+    """
+    archive_dir = get_project_dir() / "compact-history"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    path = archive_dir / f"{session_id}-{datetime.now():%Y%m%d-%H%M%S}.jsonl"
+    shutil.copy2(session_file(session_id), path)
+    return path

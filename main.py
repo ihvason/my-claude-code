@@ -12,9 +12,11 @@ from pydantic_ai import Agent
 from pydantic_graph import End
 
 import session
+import compact
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from tasks_store import TasksStore
+from file_history import FileHistory
 from memory import background, recall, store
 from ui.commands import (
     COMMANDS,
@@ -40,7 +42,12 @@ async def handle_command(user_input, state):
     """
     if not user_input.startswith("/"):
         return "pass"
-    cmd_name = user_input[1:].split()[0]
+    parts = user_input[1:].split()
+    if not parts:
+        # Bare "/" carries no command name; report it instead of falling through
+        console.print("Type a command after '/'. Use /help to list commands.\n")
+        return "continue"
+    cmd_name = parts[0]
     command = COMMANDS.get(cmd_name)
     if command is None:
         console.print(f"Unknown command: /{cmd_name}. Type /help to list commands.\n")
@@ -130,6 +137,7 @@ async def main():
         model_name=MODEL_NAME,
         session_id=session_id,
         tasks_store=tasks_store,
+        file_history=FileHistory(session_id=session_id),
     )
     print_welcome_banner("my-claude-code")
 
@@ -144,8 +152,26 @@ async def main():
             # Command requested exit: shut down the REPL
             repl.exit()
             return
+        # A command may hand back text to edit and resend (e.g. /rewind); put it in
+        # the input box instead of running the agent
+        if state.pending_input:
+            repl.prefill(state.pending_input)
+            state.pending_input = ""
+            return
         if action == "continue":
             return
+
+        # Check the context watermark before sending; compact first if it is over the threshold
+        await compact.auto_compact_if_needed(state)
+
+        # Create the checkpoint: @ mentions and memory recall have not been injected
+        # yet, so len(history) is the clean rewind index. The task snapshot is taken
+        # at the same moment so both channels roll back to the same point.
+        state.file_history.make_checkpoint(
+            len(state.history),
+            user_input,
+            tasks=state.tasks_store.snapshot() if state.tasks_store else None,
+        )
 
         # Parse @ mentions and inject referenced files as mock read_file calls into history
         inject_at_mentions(user_input, state)

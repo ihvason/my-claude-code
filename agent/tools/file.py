@@ -171,11 +171,17 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
     else:
         updated = content.replace(old_string, new_string, 1)
 
-    # 7. Write the whole file back, then refresh the record with the new content
+    # 7. Checkpoint pre-mutation content before writing to disk to support /rewind
+    if ctx.deps.file_history:
+        ctx.deps.file_history.track_edit(path)
+
+    # 8. Write the whole file back, then refresh the record with the new content
     # and mtime
     with open(path, "w", encoding="utf-8") as f:
         f.write(updated)
     state.record(path, updated)
+    if ctx.deps.file_history:
+        ctx.deps.file_history.note_written(path)
     return f"Edited {path} ({count if replace_all else 1} replacement(s))"
 
 
@@ -195,6 +201,9 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
             raise ModelRetry(f"{path} already exists; read it with read_file first to confirm nothing is lost")
         if os.path.getmtime(path) > record["timestamp"]:
             raise ModelRetry(f"{path} was modified after you read it; call read_file again before overwriting")
+    # Checkpoint pre-mutation state before writing to disk
+    if ctx.deps.file_history:
+        ctx.deps.file_history.track_edit(path)
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -206,4 +215,6 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
         return f"Error: failed to write {path} ({e})"
     # Newly written content is registered too, so later edits need not re-read it
     state.record(path, content)
+    if ctx.deps.file_history:
+        ctx.deps.file_history.note_written(path)
     return f"Wrote {path}"

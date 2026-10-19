@@ -1,31 +1,35 @@
-"""
-CLI command handlers and terminal rendering utilities for the Coding Agent.
-
-Manages interactive session lifecycle (new, resume, exit, status), formatted
-console output with Rich, Markdown rendering overrides, and message step replay.
-"""
 import difflib
+import os
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable, Optional
 
 import questionary
-from prompt_toolkit.application import in_terminal
+from prompt_toolkit.application import Application, in_terminal
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.styles import Style
 from rich.markdown import Heading, Markdown
 from rich.markup import escape
 from rich.padding import Padding
 
+import compact
 import permissions
 import session
 from agent import ReadFileState
-from tasks_store import TasksStore
+from file_history import FileHistory
 from memory import background, store
+from tasks_store import TasksStore
 from .render import console, print_step, print_welcome_banner
 
 
 class LeftAlignedHeading(Heading):
     """
-    rich renders Markdown headings centered by default, which looks misaligned in
-    a wide terminal; override it to align left instead.
+    rich centers Markdown headings by default, which looks misaligned in a wide
+    terminal; override it to align left instead.
     """
     def __rich_console__(self, console, options):
         text = self.text
@@ -40,36 +44,51 @@ Markdown.elements["heading_open"] = LeftAlignedHeading
 @dataclass
 class SessionState:
     """
-    Session state shared across commands; the main loop passes it to every
-    command handler.
+    Session state shared across commands; the main loop passes it to every command
+    handler.
     """
     history: list = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
     model_name: str = ""
+    # Current session ID; determines which jsonl file the conversation history goes to
     session_id: str = ""
-    # every model API call triggered by the most recent round of user input
+    # Records of every model API call triggered by the most recent round of user input
     last_api_calls: list = field(default_factory=list)
-    # Session-scoped ReadFileState injected into file tools; replaced with a fresh instance on session switch
+    # This session's readFileState, injected into the file tools; swapped for a fresh
+    # instance when switching sessions
     read_file_state: ReadFileState = field(default_factory=ReadFileState)
-    # Session TasksStore injected into task tools
+    # This session's TasksStore, injected into the task tools. Persisted under
+    # <project root>/.my-claude-code/projects/<project>/tasks/<session_id>/, so main
+    # must construct it and pass it in
     tasks_store: TasksStore | None = None
-    # Memory filenames already recalled and injected in this session; prevents duplicate injections
+    # Memory filenames already recalled and injected in this session; the same memory
+    # is not injected twice
     surfaced_memories: set = field(default_factory=set)
+    # This session's file checkpoints; /rewind uses them to roll back files and
+    # conversation. Constructed by main and passed in
+    file_history: FileHistory | None = None
+    # Original prompt to refill into the input box after /rewind rolls back the
+    # conversation; consumed by Repl once the command returns
+    pending_input: str = ""
+    # Consecutive automatic-compaction failures; retrying stops once this reaches the limit
+    compact_failures: int = 0
 
 
 @dataclass
 class Command:
     name: str
     description: str
-    # a handler returning False means the main loop should exit
+    # A handler returning False means the main loop should exit
     handler: Callable[["SessionState"], bool]
+    # Whether this command accepts the argument string after its name (e.g. /compact's extra instructions)
+    takes_args: bool = False
 
 
 def _truncate(text, limit: int = 120) -> str:
     """
-    Truncate and escape, for content that can grow long such as tool arguments,
-    return values and user input.
+    Truncate and escape; used for content that can grow long, such as tool
+    arguments, return values and user input.
     """
     text = str(text).strip()
     text = text if len(text) <= limit else text[:limit] + "..."
@@ -86,43 +105,44 @@ def _full(text) -> str:
 
 def _format_part_line(part) -> Optional[str]:
     """
-    Format a single part of a message into a string carrying Rich markup.
-    Layout: the icon and the role label take one line, the content moves to the
-    next line, with no "|" separator.
+    Format a single part of a message as a string carrying Rich markup.
+    Layout: icon + role label on their own line, content on the next line, with no
+    "|" separator.
     """
-    # content lines are indented 2 columns to line up with the role name that
-    # follows the icon (the icon plus its trailing space take 2 columns)
+    # Content lines are indented 2 columns to line up with the role name after the
+    # 2-column icon (icon + space)
     kind = part.part_kind
     if kind == "user-prompt":
         return f"[cyan]❯ user[/]\n  {_truncate(part.content)}"
     if kind == "thinking":
-        # dim the whole thinking block to lower its visual weight; never
-        # truncate, keep the full reasoning
+        # Dim the whole thinking block to lower its visual weight; never truncate,
+        # keep the full reasoning
         return f"[dim]✻ thinking[/]\n  [dim]{_full(part.content)}[/]"
     if kind == "text":
         content = (part.content or "").strip()
         if not content:
             return None
-        # the assistant reply is the final answer the user cares about most, so
-        # show it in full
+        # The assistant reply is the final answer the user cares about most; show it
+        # in full
         return f"[green]● assistant[/]\n  {_full(content)}"
     if kind == "tool-call":
-        # commands and paths easily run to hundreds of characters, so relax the
+        # Commands and paths easily run to hundreds of characters, so relax the
         # argument limit to 500 before truncating
         return f"[yellow]⏺ tool_call[/]\n  [yellow dim]{part.tool_name}({_truncate(part.args, 500)})[/]"
     if kind == "tool-return":
+        # Tool returned successfully; the label uses ✔
         return f"[magenta]✔ tool_return[/]\n  [magenta dim]{part.tool_name} -> {_truncate(part.content)}[/]"
     if kind == "retry-prompt":
-        # after a tool raises ModelRetry, the SDK generates a retry-prompt that
-        # feeds the error back to the model
+        # After a tool raises ModelRetry, the SDK generates a retry-prompt to feed the
+        # error back to the model; the label uses ✘ to mark the failed call
         return f"[yellow]✘ tool_retry[/]\n  [yellow dim]{part.tool_name} -> {_truncate(part.content)}[/]"
     return None
 
 
 def print_assistant_markdown(content: str) -> None:
     """
-    Model replies are naturally Markdown, so render them as a whole block rather
-    than printing the raw text.
+    Model replies are naturally Markdown, so render them as a whole block instead of
+    printing the raw text.
     """
     console.print("[green]● assistant[/]")
     # Markdown is a block-level renderable and cannot follow an inline prefix, so
@@ -130,13 +150,14 @@ def print_assistant_markdown(content: str) -> None:
     console.print(Padding(Markdown(content), (0, 0, 0, 2)))
 
 
-# Maximum lines to display in read/write previews; excess lines are collapsed into "… +N lines"
+# Maximum lines shown in read / write content previews; the rest collapses into "… +N lines"
 _PREVIEW_MAX_LINES = 8
 
 
 def _preview_numbered(content: str) -> Optional[str]:
     """
-    Formats content with green line numbers and truncates for write_file previews.
+    Add green line numbers and truncate into a preview; used to display the content
+    written by write_file.
     """
     lines = content.splitlines()
     if not lines:
@@ -151,7 +172,8 @@ def _preview_numbered(content: str) -> Optional[str]:
 
 def _preview_diff(old: str, new: str) -> str:
     """
-    Renders old -> new diff using difflib: red for deletions, green for additions, dim for unchanged lines.
+    Render old -> new as a red/green diff with difflib: removed lines red, added
+    lines green, unchanged lines dim.
     """
     out = []
     for line in difflib.ndiff(old.splitlines(), new.splitlines()):
@@ -162,21 +184,24 @@ def _preview_diff(old: str, new: str) -> str:
             out.append(f"  [green]+ {body}[/]")
         elif tag == "  ":
             out.append(f"  [dim]  {body}[/]")
-        # Skip '? ' intra-line hints generated by difflib
+        # "? " is difflib's character-level hint line; skip it
     return "\n".join(out)
 
 
 def _print_file_op(part) -> bool:
     """
-    Rich rendering for file tools: diffs for edit, line-numbered previews for write,
-    and truncated outputs for read. Returns True if handled.
+    Rich display for file tools: a red/green diff for edit, a numbered write preview
+    for write, and numbered read results for read. Returns True when handled.
     """
-    # Explicitly dispatched by tool name without a global registry to avoid an inverted dependency from agent core onto UI
+    # Special-cased by tool name rather than a registry like permissions: the display
+    # logic depends on rich, and having the tool layer register renderers would make
+    # the agent layer depend on the UI layer, which is not worth it
     kind = part.part_kind
     if kind == "tool-call" and part.tool_name in ("edit_file", "write_file"):
         args = part.args_as_dict()
         path = escape(str(args.get("path", "")))
-        # Share consistent header formatting for edit/write; vary only the body preview
+        # The label line for edit / write matches the "tool_name(path)" content-line
+        # format, so print them uniformly; only the preview below differs
         console.print("[yellow]⏺ tool_call[/]")
         console.print(Padding(f"[yellow dim]{part.tool_name}({path})[/]", (0, 0, 0, 2)))
         if part.tool_name == "edit_file":
@@ -187,7 +212,7 @@ def _print_file_op(part) -> bool:
                 console.print(block)
         return True
     if kind == "tool-return" and part.tool_name == "read_file":
-        # read_file returns pre-numbered lines; truncate by line count for preview
+        # read_file already returns numbered content, so truncate the preview by line
         console.print("[magenta]✔ tool_return[/]")
         console.print(Padding("[magenta dim]read_file[/]", (0, 0, 0, 2)))
         lines = str(part.content).splitlines()
@@ -201,38 +226,37 @@ def _print_file_op(part) -> bool:
 
 def print_part(part) -> None:
     """
-    Render a single message part: assistant text goes through Markdown block
-    rendering, every other part is a single line of text.
+    Render a single message part: assistant text goes through Markdown, file
+    operations through the rich display, and every other part is a single line of
+    text.
     """
     if part.part_kind == "text":
         content = (part.content or "").strip()
         if content:
             print_assistant_markdown(content)
-            # leave a blank line at the end of each role block so blocks are not
-            # crammed together
+            # Leave a blank line at the end of each role block so blocks are not cramped
             console.print()
         return
-    # File tools (read/edit/write) use specialized rich rendering
+    # File tools (read / edit / write) use the dedicated rich display
     if _print_file_op(part):
         console.print()
         return
     line = _format_part_line(part)
     if line:
         label, _, body = line.partition("\n")
-        # body looks like "  [markup]..."; strip the literal leading 2 spaces and
-        # let print_step indent with Padding, so wrapped continuation lines stay
-        # indented too
+        # body looks like "  [markup]..."; strip the literal leading 2 spaces and let
+        # print_step indent with Padding (wrapped continuation lines stay indented too)
         print_step(label, body[2:])
 
 
 def print_agent_steps(new_messages) -> None:
     """
-    Called from the main loop: show the intermediate steps the agent produced
-    during this turn (thinking, text, tool calls, tool returns).
+    Called from the main loop: show the intermediate steps the agent produced during
+    this turn (thinking, text, tool calls, tool returns).
     """
     for msg in new_messages:
         for part in msg.parts:
-            # the main loop already echoed what the user just typed
+            # The main loop already echoed what the user just typed
             if part.part_kind == "user-prompt":
                 continue
             print_part(part)
@@ -253,44 +277,76 @@ def cmd_help(state: SessionState) -> bool:
 
 def cmd_new(state: SessionState) -> bool:
     """
-    Starts a new session: clears history, token counters, API call logs, and assigns a new session ID.
+    Start a new session: clear history, token counters and API call records, and
+    switch to a new session ID.
     """
     state.history.clear()
     state.input_tokens = 0
     state.output_tokens = 0
     state.last_api_calls.clear()
     state.session_id = session.new_session_id()
-    # Permission whitelists are session-scoped; 'always allow' choices do not carry over to new sessions
+    # The permission allowlist is session-scoped; "always allow for this session"
+    # must not carry into a new session
     permissions.state.session_allowed.clear()
-    # ReadFileState is session-scoped; resets to empty so cached files do not carry over
+    # readFileState is session-scoped too; a new session starts blank and does not
+    # inherit files read by the old one
     state.read_file_state = ReadFileState()
-    # TasksStore is isolated per session (~/.my-claude-code/tasks/<session_id>/); instantiating a new store updates the TUI task panel on the next redraw
+    # TasksStore persists per session
+    # (<project root>/.my-claude-code/projects/<project>/tasks/<session_id>/);
+    # switching sessions swaps in a new one, and the task panel reflects the new
+    # store on the next repaint
     state.tasks_store = TasksStore(session_id=state.session_id)
-    # Recall deduplication set is session-scoped; allows past memories to be surfaced again in the new session
+    # The recall de-duplication set is session-scoped; old memories may be recalled
+    # again in a new session
     state.surfaced_memories = set()
-    console.print("Started new session\n")
+    # File checkpoints are also session-scoped; a new session records from scratch
+    state.file_history = FileHistory(session_id=state.session_id)
+    state.compact_failures = 0
+    console.print("Started a new session\n")
     return True
+
+
+def _one_line(text, limit: int = 50) -> str:
+    """
+    Collapse whitespace onto one line and truncate; plain text for prompt_toolkit,
+    with no Rich escaping.
+    """
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def _summary_line(mtime, prompt: str) -> str:
     """
-    Format a session display line: modification time + initial user prompt snippet.
+    Build the display text for one session entry: modification time + a summary of
+    the first user input.
     """
-    prompt = " ".join(str(prompt).split())
-    if len(prompt) > 50:
-        prompt = prompt[:50] + "..."
-    return f"{mtime:%m-%d %H:%M}  {prompt}"
+    return f"{mtime:%m-%d %H:%M}  {_one_line(prompt)}"
+
+
+def _recount_tokens(state: SessionState) -> None:
+    """
+    Recount the session's token usage from the conversation history; every model
+    response carries usage. Called wherever the history is replaced wholesale
+    (/resume restoring it, /rewind truncating it).
+    """
+    state.input_tokens = sum(
+        m.usage.input_tokens for m in state.history if m.kind == "response"
+    )
+    state.output_tokens = sum(
+        m.usage.output_tokens for m in state.history if m.kind == "response"
+    )
 
 
 async def cmd_resume(state: SessionState) -> bool:
     """
-    Lists historical sessions for the current project and restores conversation history upon selection.
-    Runs asynchronously within the REPL event loop: in_terminal yields the terminal to questionary,
-    restoring the prompt upon completion.
+    List this project's past sessions and restore the conversation history of the
+    chosen one.
+    It runs on the REPL event loop, hence async: in_terminal yields the terminal to
+    questionary and restores the input box afterwards.
     """
     sessions = session.list_sessions()
     if not sessions:
-        console.print("(No session history found for the current project)\n")
+        console.print("(No past sessions for this project yet)\n")
         return True
 
     choices = [
@@ -299,41 +355,301 @@ async def cmd_resume(state: SessionState) -> bool:
     ]
     async with in_terminal():
         selected = await questionary.select(
-            "Select a session to resume (arrow keys to navigate, Enter to confirm):",
-            choices=choices,
+            "Select a session to resume (arrow keys to move, Enter to confirm):", choices=choices
         ).ask_async()
-    # Selection cancelled via Ctrl+C
+    # The user cancelled the selection with Ctrl+C
     if selected is None:
         return True
 
-    # Restore conversation history and point session ID to the chosen past session so subsequent messages append to the same file
+    # Restore the conversation history and switch the session ID to the chosen old
+    # session, so later messages keep appending to the same file
     state.history = session.load_history(selected)
     state.session_id = selected
-    # Permission whitelist is session-scoped; clear upon switching sessions
+    # The permission allowlist is session-scoped; clear it when switching sessions
     permissions.state.session_allowed.clear()
-    # ReadFileState is session-scoped; replace with a clean instance. Although read history exists in transcripts, file mtimes on disk may have changed since exit; requiring a re-read on initial edit ensures consistency
+    # readFileState is session-scoped too; swap in a fresh instance after switching.
+    # The restored history contains read traces, but files may have changed since the
+    # process exited and their mtimes are no longer trustworthy, so it is safer to
+    # have the model re-read before its first edit
     state.read_file_state = ReadFileState()
-    # Point TasksStore to the resumed session directory to reconnect disk-backed tasks (each stored as standalone JSON)
+    # TasksStore points at the current session_id's directory, so resuming picks the
+    # old task list back up directly (each task is its own JSON file, already on disk)
     state.tasks_store = TasksStore(session_id=state.session_id)
-    # Reset recall deduplication set; previously surfaced memories may be recalled once more without significant downside
+    # Restart the recall de-duplication set from empty: memories already injected in
+    # the restored history may be recalled once more, and one duplicate is harmless
     state.surfaced_memories = set()
+    # File checkpoints are restored along with the session: the constructor loads
+    # that session's checkpoints.json, making old checkpoints usable immediately
+    state.file_history = FileHistory(session_id=state.session_id)
+    state.compact_failures = 0
 
-    # Recompute cumulative token usage from per-response usage entries in jsonl
-    state.input_tokens = sum(
-        m.usage.input_tokens for m in state.history if m.kind == "response"
-    )
-    state.output_tokens = sum(
-        m.usage.output_tokens for m in state.history if m.kind == "response"
-    )
-    # Clear in-memory API call logs since they cannot be reconstructed from disk
+    # Add up the restored session's token usage
+    _recount_tokens(state)
+    # The last round's API call records live only in this process and cannot be
+    # restored; clear them
     state.last_api_calls.clear()
 
-    # Replay restored conversation transcript to the terminal
-    console.print(f"\nResumed session {selected[:8]} ({len(state.history)} messages):\n")
+    # Replay the restored conversation to the screen
+    console.print(f"\nResumed session {selected[:8]} with {len(state.history)} messages:\n")
     for msg in state.history:
         for part in msg.parts:
-            # Replay shares identical rendering logic with live streaming
+            # Replay and live output share the same part-rendering logic
             print_part(part)
+    console.print()
+    return True
+
+
+# Rewind picker colors: current entry highlighted blue, descriptions and footer
+# muted, added/removed line counts green/red
+_PICKER_STYLE = Style.from_dict({
+    "question": "bold",
+    "label-current": "#3b82f6 bold",
+    "label": "",
+    "desc": "#6b7280",
+    "plus": "#10b981",
+    "minus": "#ef4444",
+    "footer": "#6b7280",
+})
+
+
+class _ListPicker:
+    """
+    Hand-drawn single-select picker; each option may carry one muted description
+    line, visually aligned with the permission approval picker.
+    """
+
+    def __init__(self, question: str, options: list, header: list | None = None):
+        # options is a list of (value, label, desc); desc is a list of FormattedText
+        # fragments, None means no description line
+        self.question = question
+        self.options = options
+        # header is a list of FormattedText fragments rendered between the question
+        # and the options
+        self.header = header
+        self.cursor = 0
+        # Value of the selected option; stays None when cancelled with Esc / Ctrl+C
+        self.result = None
+        self.app = self._build_app()
+
+    def _render_question(self):
+        return FormattedText([("class:question", self.question)])
+
+    def _render_header(self):
+        return FormattedText(self.header)
+
+    def _render_options(self):
+        lines: list[tuple[str, str]] = []
+        for i, (_value, label, desc) in enumerate(self.options):
+            is_cursor = (i == self.cursor)
+            pointer = "❯" if is_cursor else " "
+            cls_label = "class:label-current" if is_cursor else "class:label"
+            lines.append((cls_label, f" {pointer}  {i + 1}. {label}"))
+            lines.append(("", "\n"))
+            if desc:
+                # Indent the description line to align with the label text
+                lines.append(("", "       "))
+                lines.extend(desc)
+                lines.append(("", "\n"))
+        return FormattedText(lines)
+
+    def _render_footer(self):
+        return FormattedText([("class:footer", "  ↑↓ Select · Enter Confirm · Esc Cancel")])
+
+    def _move(self, delta: int):
+        self.cursor = (self.cursor + delta) % len(self.options)
+
+    def _build_app(self) -> Application:
+        kb = KeyBindings()
+
+        @kb.add("up")
+        @kb.add("k")
+        def _(event):
+            self._move(-1)
+
+        @kb.add("down")
+        @kb.add("j")
+        def _(event):
+            self._move(1)
+
+        @kb.add("enter")
+        def _(event):
+            self.result = self.options[self.cursor][0]
+            self.app.exit()
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        def _(event):
+            self.app.exit()
+
+        windows = [
+            Window(FormattedTextControl(self._render_question), height=1, always_hide_cursor=True),
+            Window(FormattedTextControl(self._render_options), dont_extend_height=True, always_hide_cursor=True),
+            Window(FormattedTextControl(self._render_footer), height=1, always_hide_cursor=True),
+        ]
+        if self.header:
+            windows.insert(1, Window(
+                FormattedTextControl(self._render_header),
+                dont_extend_height=True, always_hide_cursor=True,
+            ))
+        layout = Layout(HSplit(windows))
+        return Application(
+            layout=layout,
+            key_bindings=kb,
+            style=_PICKER_STYLE,
+            full_screen=False,
+            mouse_support=False,
+            # Erase the whole picker after selection so options are not left in the scrollback
+            erase_when_done=True,
+        )
+
+    async def run(self):
+        await self.app.run_async()
+        return self.result
+
+
+def _age_text(timestamp: float) -> str:
+    """
+    Turn a timestamp into relative time such as "14 min ago".
+    """
+    seconds = max(0, time.time() - timestamp)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    return f"{int(seconds // 86400)} d ago"
+
+
+def _changes_headline(changes) -> tuple:
+    """
+    Compress a list of FileChange into (name, insertions, deletions): a single file
+    shows its filename, several show a count.
+    """
+    plus = sum(c.insertions for c in changes)
+    minus = sum(c.deletions for c in changes)
+    if len(changes) == 1:
+        name = os.path.basename(changes[0].path)
+    else:
+        name = f"{len(changes)} files"
+    return name, plus, minus
+
+
+def _changes_fragments(changes) -> list:
+    """
+    Render a list of FileChange as picker description fragments: "main.py +12 -3" or
+    "no code changes".
+    """
+    if not changes:
+        return [("class:desc", "no code changes")]
+    name, plus, minus = _changes_headline(changes)
+    return [
+        ("class:desc", f"{name} "),
+        ("class:plus", f"+{plus}"),
+        ("class:minus", f" -{minus}"),
+    ]
+
+
+async def cmd_rewind(state: SessionState) -> bool:
+    """
+    Rewind to an earlier checkpoint: first pick the checkpoint, then choose whether to
+    roll back the conversation, the code, or both.
+    """
+    fh = state.file_history
+    if fh is None or not fh.checkpoints:
+        console.print("(No checkpoints to rewind to; one is created automatically each time a message is sent)\n")
+        return True
+
+    # Checkpoints listed newest first, each annotated with the change volume produced
+    # by that turn
+    cps = list(reversed(fh.checkpoints))
+    options = [
+        (i, _one_line(s.prompt), _changes_fragments(fh.turn_stats(s)))
+        for i, s in enumerate(cps)
+    ]
+    async with in_terminal():
+        picked = await _ListPicker("Rewind to before which message:", options).run()
+    if picked is None:
+        return True
+    cp = cps[picked]
+    # Tracked files edited outside the agent's file tools (manual edits, a formatter,
+    # another process) are left untouched: the user's work outranks a change the agent
+    # can replay, and overwriting it would be unrecoverable
+    skipped = sorted(p for p in fh.externally_modified() if p in fh.versions)
+    # The confirmation shows the cumulative cost: every change to undo when going from
+    # the current state back to the checkpoint
+    plan = fh.diff_stats(cp, skip=set(skipped))
+
+    # The confirmation is rendered as the second-level menu's header by the picker
+    header = [
+        ("", "\n"),
+        ("class:desc", f"  │ {_one_line(cp.prompt, 100)}\n"),
+        ("class:desc", f"  │ ({_age_text(cp.timestamp)})\n"),
+        ("", "\n"),
+    ]
+    if plan:
+        name, plus, minus = _changes_headline(plan)
+        header += [
+            ("", "Code will restore "),
+            ("class:plus", f"+{plus}"),
+            ("class:minus", f" -{minus}"),
+            ("", f" ({name})\n"),
+        ]
+    else:
+        header.append(("class:desc", "No code changes\n"))
+    if skipped:
+        header.append(("class:desc", f"  │ {len(skipped)} file(s) changed outside the agent will be left untouched:\n"))
+        for path in skipped[:5]:
+            header.append(("class:desc", f"  │   {os.path.basename(path)}\n"))
+        if len(skipped) > 5:
+            header.append(("class:desc", f"  │   … and {len(skipped) - 5} more\n"))
+        header.append(("", "\n"))
+
+    channel_options = [
+        ("both", "Rewind both conversation and code", None),
+        ("conversation", "Rewind conversation only", None),
+        ("code", "Rewind code only", None),
+        (None, "Cancel", None),
+    ]
+    async with in_terminal():
+        channel = await _ListPicker("Will rewind to before you sent this message:", channel_options, header=header).run()
+    if channel is None:
+        return True
+
+    # Rewind files before the conversation; the order matters, because rewinding the
+    # conversation drops this checkpoint and every later one
+    if channel in ("both", "code"):
+        fh.rewind_files(cp, skip=set(skipped))
+    if channel in ("both", "conversation"):
+        # Truncate the in-memory history and rewrite the session file wholesale
+        state.history = state.history[: cp.history_index]
+        session.rewrite_messages(state.session_id, state.history)
+        # Checkpoints for the truncated conversation are meaningless now; drop them
+        fh.drop_from(cp)
+        # Refill the input box with the prompt that was rolled back, so the user can
+        # tweak and resend it
+        state.pending_input = cp.prompt
+        # Recount tokens from the remaining history, clear the in-process API call
+        # records, and allow memories to be recalled again
+        _recount_tokens(state)
+        state.last_api_calls.clear()
+        state.surfaced_memories = set()
+        state.compact_failures = 0
+        # Tasks are conversation-level state; roll them back to the snapshot taken at
+        # this checkpoint. Checkpoints written before task rollback existed have no
+        # snapshot, so they are left alone.
+        if state.tasks_store is not None and cp.tasks is not None:
+            state.tasks_store.restore(cp.tasks)
+    # Whichever channel is rewound, readFileState's recorded contents and mtimes are
+    # stale and must be cleared; otherwise the read-before-write gate would allow
+    # edits based on old content
+    state.read_file_state = ReadFileState()
+
+    console.print(f"Rewound to the checkpoint from {datetime.fromtimestamp(cp.timestamp):%H:%M}")
+    if skipped:
+        names = ", ".join(os.path.basename(p) for p in skipped[:5])
+        more = f" and {len(skipped) - 5} more" if len(skipped) > 5 else ""
+        console.print(f"[yellow]Kept {len(skipped)} file(s) changed outside the agent: {names}{more}[/]")
     console.print()
     return True
 
@@ -342,18 +658,60 @@ def cmd_status(state: SessionState) -> bool:
     console.print(f"Model:            {state.model_name}")
     console.print(f"Permission mode:  {permissions.state.mode}")
     console.print(f"History messages: {len(state.history)}")
+    used = compact.context_tokens(state.history)
+    threshold = compact.compact_threshold()
+    if used:
+        console.print(f"Context (est.):   {used:,} / {threshold:,} tokens ({used * 100 // threshold}%)")
+    else:
+        console.print(f"Context (est.):   no data yet (auto-compaction threshold {threshold:,} tokens)")
     console.print(f"Input tokens:     {state.input_tokens}")
     console.print(f"Output tokens:    {state.output_tokens}\n")
     return True
 
 
+def cmd_memory(state: SessionState) -> bool:
+    """
+    Show the memory directory, all memory files, and the MEMORY.md index.
+    """
+    console.print(f"Memory directory: {store.memory_dir()}\n")
+    headers = store.scan_memory_files()
+    if not headers:
+        console.print("(No memories yet; memory accumulates gradually as you talk)\n")
+        return True
+    for h in headers:
+        age = store.age_text(store.age_days(h.mtime))
+        console.print(escape(f"  [{h.type or '?'}] {h.filename} ({age})"))
+        console.print(f"      [dim]{escape(h.description)}[/]")
+    console.print()
+    index = store.read_index()
+    if index:
+        console.print("MEMORY.md index:")
+        console.print(Padding(Markdown(index), (0, 0, 0, 2)))
+        console.print()
+    return True
+
+
+async def cmd_dream(state: SessionState) -> bool:
+    """
+    Trigger memory consolidation manually, bypassing the automatic gates so the effect
+    is visible immediately.
+    """
+    console.print("Consolidating memory, this may take a moment...\n")
+    try:
+        await background.dream(list(state.history), force=True, session_id=state.session_id)
+    except Exception as e:
+        console.print(f"[red]Consolidation failed: {type(e).__name__}: {e}[/]\n")
+    console.print()
+    return True
+
+
 def cmd_api_detail(state: SessionState) -> bool:
     """
-    Show the metadata of every model API call triggered by the most recent round
-    of user input.
+    Show metadata for every model API call triggered by the most recent round of user
+    input.
     """
     if not state.last_api_calls:
-        console.print("(No model calls recorded yet - send a message first)\n")
+        console.print("(No model calls recorded yet; send a message first and come back)\n")
         return True
 
     console.print(f"{len(state.last_api_calls)} model API call(s) in the last round\n")
@@ -376,48 +734,27 @@ def cmd_api_detail(state: SessionState) -> bool:
     return True
 
 
-def cmd_memory(state: SessionState) -> bool:
+async def cmd_compact(state: SessionState, args: str = "") -> bool:
     """
-    Displays the memory directory, all memory files, and the MEMORY.md index.
+    Compact the context manually; accepts extra instructions, e.g.
+    /compact keep the file changes.
     """
-    console.print(f"Memory directory: {store.memory_dir()}\n")
-    headers = store.scan_memory_files()
-    if not headers:
-        console.print("(No memories accumulated yet; memories build up across conversations)\n")
-        return True
-    for h in headers:
-        age = store.age_text(store.age_days(h.mtime))
-        console.print(escape(f"  [{h.type or '?'}] {h.filename} ({age})"))
-        console.print(f"      [dim]{escape(h.description)}[/]")
-    console.print()
-    index = store.read_index()
-    if index:
-        console.print("MEMORY.md Index:")
-        console.print(Padding(Markdown(index), (0, 0, 0, 2)))
-        console.print()
-    return True
-
-
-async def cmd_dream(state: SessionState) -> bool:
-    """
-    Manually triggers memory consolidation and sleep phase, bypassing automated gates for immediate testing.
-    """
-    console.print("Consolidating memories, this may take a moment...\n")
     try:
-        await background.dream(list(state.history), force=True, session_id=state.session_id)
+        await compact.run_compact(state, custom_instructions=args)
     except Exception as e:
-        console.print(f"[red]Consolidation failed: {type(e).__name__}: {e}[/]\n")
-    console.print()
+        console.print(f"[red]Compaction failed: {type(e).__name__}: {e}[/]\n")
     return True
 
 
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
-    "resume": Command("resume", "resume a history session", cmd_resume),
+    "resume": Command("resume", "resume a past session", cmd_resume),
+    "rewind": Command("rewind", "rewind to an earlier checkpoint", cmd_rewind),
+    "compact": Command("compact", "compact the context (accepts extra instructions)", cmd_compact, takes_args=True),
     "status": Command("status", "show the current session state", cmd_status),
+    "memory": Command("memory", "view long-term memory", cmd_memory),
+    "dream": Command("dream", "consolidate long-term memory now", cmd_dream),
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
     "exit": Command("exit", "quit the program", cmd_exit),
-    "memory": Command("memory", "inspect long-term memories", cmd_memory),
-    "dream": Command("dream", "consolidate and compact long-term memories now", cmd_dream),
 }

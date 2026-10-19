@@ -107,6 +107,29 @@ class TasksStore:
         del self._tasks[task_id]
         self._task_path(task_id).unlink()
 
+    def snapshot(self) -> dict:
+        """
+        Serializable snapshot of the whole task state, used by /rewind checkpoints.
+        """
+        return {
+            "tasks": [asdict(t) for t in self.list()],
+            "highwatermark": self._highwatermark,
+        }
+
+    def restore(self, snapshot: dict) -> None:
+        """
+        Roll the store back to a snapshot taken earlier by snapshot().
+        Both the in-memory cache and the on-disk directory are rewritten, so tasks
+        created after the snapshot disappear and tasks deleted since come back.
+        """
+        self._tasks = {t["id"]: Task(**t) for t in snapshot.get("tasks", [])}
+        self._highwatermark = int(snapshot.get("highwatermark", 0))
+        for path in list(self._json_paths()):
+            path.unlink(missing_ok=True)
+        for task in self._tasks.values():
+            self._write(task)
+        self._write_highwatermark(self._highwatermark)
+
     # ---------- Internal Utilities ----------
 
     def _json_paths(self) -> Iterator[Path]:
