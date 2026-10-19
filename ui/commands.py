@@ -17,6 +17,7 @@ from rich.markup import escape
 from rich.padding import Padding
 
 import compact
+import mcp_servers
 import permissions
 import session
 from agent import ReadFileState
@@ -746,6 +747,25 @@ async def cmd_compact(state: SessionState, args: str = "") -> bool:
     return True
 
 
+def cmd_mcp(state: SessionState) -> bool:
+    """
+    Show connection status and tool inventory for every configured MCP server.
+    """
+    if not mcp_servers.RECORDS:
+        console.print(f"No MCP servers configured. Add them to .mcp.json in the project root or to {mcp_servers.USER_CONFIG}.\n")
+        return True
+    for record in mcp_servers.RECORDS:
+        console.print(f"[bold]{record.name}[/]  [dim]{escape(record.transport)}[/]")
+        if record.status == "connected":
+            console.print(f"  [green]connected[/], {len(record.tool_names)} tool(s)")
+            for name in record.tool_names:
+                console.print(f"    - {name}")
+        else:
+            console.print(f"  [red]connection failed[/]: {escape(record.error)}")
+        console.print()
+    return True
+
+
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
     "resume": Command("resume", "resume a past session", cmd_resume),
@@ -754,6 +774,7 @@ COMMANDS = {
     "status": Command("status", "show the current session state", cmd_status),
     "memory": Command("memory", "view long-term memory", cmd_memory),
     "dream": Command("dream", "consolidate long-term memory now", cmd_dream),
+    "mcp": Command("mcp", "查看 MCP server 状态和工具", cmd_mcp),
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
     "exit": Command("exit", "quit the program", cmd_exit),

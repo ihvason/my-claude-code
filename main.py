@@ -13,6 +13,7 @@ from pydantic_graph import End
 
 import session
 import compact
+import mcp_servers
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from tasks_store import TasksStore
@@ -85,7 +86,8 @@ async def run_agent_loop(user_input, state):
         tasks_store=state.tasks_store,
     )
     async with agent.iter(
-        user_input, message_history=state.history, deps=deps
+        user_input, message_history=state.history, deps=deps,
+        toolsets=mcp_servers.active_toolsets(),
     ) as run:
         node = run.next_node
 
@@ -141,6 +143,12 @@ async def main():
     )
     print_welcome_banner("my-claude-code")
 
+    # 转圈提示连接进度，否则冷启动拉包时用户会以为卡死了
+    with console.status("Connecting MCP server..."):
+        mcp_summary = await mcp_servers.startup()
+    if mcp_summary:
+        console.print(mcp_summary + "\n")
+
     # Persistent input bar: remains visible at the bottom throughout the session
     repl = Repl(state)
 
@@ -193,6 +201,8 @@ async def main():
     # Before exiting, give in-flight background memory tasks time to finish;
     # killing extraction midway leaves half-written memories behind
     await background.drain()
+
+    await mcp_servers.shutdown()
 
 
 if __name__ == "__main__":
