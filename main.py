@@ -175,6 +175,10 @@ async def main():
         if action == "continue":
             return
 
+        # Record the prompt in the session metadata so /resume can list the session
+        # without opening the transcript
+        session.note_prompt(state.session_id, user_input, MODEL_NAME)
+
         # Check the context watermark before sending; compact first if it is over the threshold
         await compact.auto_compact_if_needed(state)
 

@@ -14,9 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-from utils import get_project_dir
-
-JOBS_ROOT = get_project_dir() / "jobs"
+from utils import get_session_dir
 
 _ID_ALPHABET = string.digits + string.ascii_lowercase
 
@@ -72,7 +70,7 @@ class JobRegistry:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self._jobs: dict[str, Job] = {}
-        self._jobs_dir = JOBS_ROOT / session_id
+        self._jobs_dir = get_session_dir(session_id) / "jobs"
         # Hold watcher references so they are not garbage-collected and cancelled early
         self._watchers: set = set()
 

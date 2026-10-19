@@ -1,6 +1,6 @@
 """
 Task persistence layer: each task is stored as an individual JSON file under
-<project_root>/.my-claude-code/projects/<project>/tasks/<session_id>/<id>.json.
+<project dir>/sessions/<session_id>/tasks/<id>.json.
 A .highwatermark file tracks the highest allocated task ID to prevent ID reuse after deletions.
 
 All state is loaded into memory once during __init__; mutations synchronously flush to disk
@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterator, Literal
 
-from utils import get_project_dir
+from utils import get_session_dir
 
 
 # Only these three statuses are persisted to disk; 'deleted' is a pseudo-status signal during update that triggers deletion instead of serialization.
@@ -46,8 +46,9 @@ class TasksStore:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self.dir = get_project_dir() / "tasks" / session_id
-        self.dir.mkdir(parents=True, exist_ok=True)
+        # Lives inside the session bundle; the directory is created on first write so
+        # a session that never creates a task leaves nothing behind
+        self.dir = get_session_dir(session_id) / "tasks"
         # Populate in-memory cache from disk once during initialization; subsequent read/write operations update memory and flush to disk synchronously.
         self._tasks: dict[str, Task] = {}
         for path in self._json_paths():
@@ -134,6 +135,8 @@ class TasksStore:
 
     def _json_paths(self) -> Iterator[Path]:
         # Helper for __init__; yields only *.json files, skipping hidden files like .highwatermark.
+        if not self.dir.is_dir():
+            return
         for path in self.dir.iterdir():
             if path.suffix == ".json" and not path.name.startswith("."):
                 yield path
@@ -153,10 +156,16 @@ class TasksStore:
         except (OSError, ValueError):
             return 0
 
+    def _ensure_dir(self) -> None:
+        # Created on demand so an unused session leaves no empty task directory
+        self.dir.mkdir(parents=True, exist_ok=True)
+
     def _write_highwatermark(self, value: int) -> None:
+        self._ensure_dir()
         self._highwatermark_path().write_text(str(value), encoding="utf-8")
 
     def _write(self, task: Task) -> None:
+        self._ensure_dir()
         self._task_path(task.id).write_text(
             json.dumps(asdict(task), ensure_ascii=False, indent=2),
             encoding="utf-8",

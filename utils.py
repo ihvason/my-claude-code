@@ -71,3 +71,20 @@ def get_project_dir() -> Path:
     not fork a separate data namespace.
     """
     return get_data_dir() / "projects" / encode_project_path(get_project_root(Path.cwd()))
+
+
+@cache
+def get_sessions_dir() -> Path:
+    """
+    Container for per-session bundles: <project dir>/sessions.
+    """
+    return get_project_dir() / "sessions"
+
+
+def get_session_dir(session_id: str) -> Path:
+    """
+    Bundle directory for one session. Every per-session artifact (transcript,
+    metadata, tasks, jobs, file history, archives) lives inside it, so a session
+    can be deleted, backed up or moved as a single directory.
+    """
+    return get_sessions_dir() / session_id

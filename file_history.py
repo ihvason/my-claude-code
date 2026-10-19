@@ -11,10 +11,10 @@ the matching version; tracked files not recorded in it fall back to their v1 (th
 state before they were first touched); a v1 of None means "did not exist yet", so
 rewinding deletes the file.
 
-Backup files live in a file-history/<session_id>/ directory next to the session
-files; checkpoint metadata is persisted in checkpoints.json, so checkpoints taken
-before /resume remain usable afterwards. Files changed by run_command are out of
-scope for tracking.
+Backup files live in the session bundle at sessions/<session_id>/file-history/;
+checkpoint metadata is persisted in checkpoints.json, so checkpoints taken before
+/resume remain usable afterwards. Files changed by run_command are out of scope for
+tracking.
 """
 import difflib
 import hashlib
@@ -25,7 +25,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from utils import get_project_dir
+from utils import get_session_dir
 
 
 @dataclass
@@ -80,7 +80,7 @@ class FileHistory:
     """
 
     def __init__(self, session_id: str):
-        self.dir = get_project_dir() / "file-history" / session_id
+        self.dir = get_session_dir(session_id) / "file-history"
         # Checkpoint list, oldest to newest
         self.checkpoints: list[Checkpoint] = []
         # path -> backup filenames per version, index i maps to version i+1; None means that version does not exist

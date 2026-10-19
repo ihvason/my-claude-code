@@ -187,13 +187,13 @@ def _dream_due(current_session_id: str) -> bool:
     last = lock.stat().st_mtime if lock.exists() else 0.0
     if time.time() - last < DREAM_MIN_HOURS * 3600:
         return False
-    if not session.STORAGE_DIR.exists():
+    if not session.SESSIONS_DIR.exists():
         return False
-    # Count session files touched since the last consolidation, excluding the
-    # current session - it is still in progress
+    # Count transcripts touched since the last consolidation, excluding the current
+    # session - it is still in progress
     touched = [
-        p for p in session.STORAGE_DIR.glob("*.jsonl")
-        if p.stem != current_session_id and p.stat().st_mtime > last
+        p for p in session.SESSIONS_DIR.glob(f"*/{session.TRANSCRIPT_NAME}")
+        if p.parent.name != current_session_id and p.stat().st_mtime > last
     ]
     return len(touched) >= DREAM_MIN_SESSIONS
 

@@ -307,10 +307,9 @@ def cmd_new(state: SessionState) -> bool:
     # readFileState is session-scoped too; a new session starts blank and does not
     # inherit files read by the old one
     state.read_file_state = ReadFileState()
-    # TasksStore persists per session
-    # (<project root>/.my-claude-code/projects/<project>/tasks/<session_id>/);
-    # switching sessions swaps in a new one, and the task panel reflects the new
-    # store on the next repaint
+    # TasksStore persists inside the session bundle
+    # (sessions/<session_id>/tasks/); switching sessions swaps in a new one, and the
+    # task panel reflects the new store on the next repaint
     state.tasks_store = TasksStore(session_id=state.session_id)
     # The recall de-duplication set is session-scoped; old memories may be recalled
     # again in a new session
