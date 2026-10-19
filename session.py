@@ -70,7 +70,7 @@ def first_prompt(path: Path) -> str:
                 if part.get("part_kind") != "user-prompt":
                     continue
                 content = str(part.get("content", ""))
-                if content.startswith("<system-reminder>"):
+                if content.startswith(("<system-reminder>", "<task-notification>")):
                     continue
                 return content
     return "(empty session)"

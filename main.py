@@ -16,8 +16,10 @@ import compact
 import mcp_servers
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
+from agent.reminders import build_job_reminder_text
 from tasks_store import TasksStore
 from file_history import FileHistory
+from background_jobs import JobRegistry
 from memory import background, recall, store
 from ui.commands import (
     COMMANDS,
@@ -80,10 +82,13 @@ async def run_agent_loop(user_input, state):
     """
     api_call_log.clear()
 
-    # Bundles the session's readFileState and tasksStore into AgentDeps to inject into the tool layer, accessible via ctx.deps.* within tools.
+    # deps bundles this session's readFileState, tasksStore, file checkpoints and job
+    # registry into AgentDeps for the tool layer, where tools reach them via ctx.deps.*
     deps = AgentDeps(
         read_file_state=state.read_file_state,
         tasks_store=state.tasks_store,
+        file_history=state.file_history,
+        job_registry=state.job_registry,
     )
     async with agent.iter(
         user_input, message_history=state.history, deps=deps,
@@ -140,10 +145,11 @@ async def main():
         session_id=session_id,
         tasks_store=tasks_store,
         file_history=FileHistory(session_id=session_id),
+        job_registry=JobRegistry(session_id=session_id),
     )
     print_welcome_banner("my-claude-code")
 
-    # 转圈提示连接进度，否则冷启动拉包时用户会以为卡死了
+    # Spinner while connecting; otherwise a cold start that fetches packages looks like a hang
     with console.status("Connecting MCP server..."):
         mcp_summary = await mcp_servers.startup()
     if mcp_summary:
@@ -196,11 +202,43 @@ async def main():
         # periodic consolidation is due
         background.schedule(state, result.new_messages())
 
-    await repl.run(on_submit)
+    async def on_system(text):
+        # System-triggered turn (background job completion notice): skip checkpointing,
+        # @ parsing and memory recall, and run the agent directly
+        await compact.auto_compact_if_needed(state)
+        repl.start_working()
+        result = await run_agent_loop(text, state)
+        background.schedule(state, result.new_messages())
+
+    async def watch_jobs():
+        # Idle wake-up: if a job finishes while the REPL is idle, submit the notice as a
+        # system turn so the model reports it
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if not repl.is_idle:
+                    continue
+                text = build_job_reminder_text(state.job_registry)
+                if text:
+                    repl.submit_system(text)
+        except asyncio.CancelledError:
+            pass
+
+    job_watcher = asyncio.ensure_future(watch_jobs())
+    try:
+        await repl.run(on_submit, on_system)
+    finally:
+        job_watcher.cancel()
 
     # Before exiting, give in-flight background memory tasks time to finish;
     # killing extraction midway leaves half-written memories behind
     await background.drain()
+
+    # Background jobs are real processes: terminate them instead of waiting, so none
+    # outlive this session
+    killed = state.job_registry.shutdown()
+    if killed:
+        console.print(f"[dim]Terminated {killed} still-running background job(s) on exit[/]")
 
     await mcp_servers.shutdown()
 

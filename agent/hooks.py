@@ -18,7 +18,7 @@ import classifier
 import permissions
 from ui.render import console, print_step
 
-from .reminders import build_reminder_text, build_task_reminder_text
+from .reminders import build_job_reminder_text, build_reminder_text, build_task_reminder_text
 
 
 MAX_RETRIES = 3
@@ -142,13 +142,19 @@ def _build_task_reminder(ctx, messages) -> str | None:
     return build_task_reminder_text(ctx.deps.tasks_store)
 
 
+def _build_job_reminder(ctx, messages) -> str | None:
+    # Background jobs that finished during a turn are reported just before the next
+    # model request
+    return build_job_reminder_text(ctx.deps.job_registry)
+
+
 # Registered reminder builders executed in before_model_request: (sentinel, builder) pairs.
 # Sentinels are used solely for reverse-scan identification (e.g., task reminders).
 _REMINDER_SENTINELS = {
     # Task reminder sentinel matches the static phrase guaranteed by the reminder builder
     "task": "The task tools haven't been used recently",
 }
-_REMINDER_BUILDERS = (_build_file_reminder, _build_task_reminder)
+_REMINDER_BUILDERS = (_build_file_reminder, _build_task_reminder, _build_job_reminder)
 
 
 @hooks.on.before_model_request

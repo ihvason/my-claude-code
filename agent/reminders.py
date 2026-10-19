@@ -1,10 +1,13 @@
 """
 Constructs system-reminder text. Actual injection is hooked in agent/hooks.py.
 """
+from rich.markup import escape
+
+from background_jobs import JobRegistry
 from tasks_store import TasksStore
+from ui.render import console
 
 from .file_state import ReadFileState
-
 
 def _wrap(lines: list[str]) -> str:
     return f"<system-reminder>\n{chr(10).join(lines)}\n</system-reminder>"
@@ -44,3 +47,31 @@ def build_task_reminder_text(store: TasksStore) -> str:
         for t in tasks:
             lines.append(f"#{t.id}. [{t.status}] {t.subject}")
     return _wrap(lines)
+
+
+def build_job_reminder_text(registry: JobRegistry | None) -> str | None:
+    """
+    Render finished-but-unnotified background jobs as <task-notification> blocks;
+    returns None when there are no new completions.
+    """
+    if registry is None:
+        return None
+    jobs = registry.pop_unnotified()
+    if not jobs:
+        return None
+    blocks = []
+    for job in jobs:
+        # Print a completion line for the user while also notifying the model
+        color = "green" if job.status == "completed" else "red"
+        console.print(f"[{color}]●[/] {escape(job.summary())}\n")
+        summary = f"{job.summary()}, read the output file with read_file"
+        blocks.append(
+            "<task-notification>\n"
+            f"<task-id>{job.id}</task-id>\n"
+            f"<task-type>{job.kind}</task-type>\n"
+            f"<output-file>{job.log_path}</output-file>\n"
+            f"<status>{job.status}</status>\n"
+            f"<summary>{summary}</summary>\n"
+            "</task-notification>"
+        )
+    return "\n\n".join(blocks)

@@ -42,3 +42,10 @@ def print_welcome_banner(title: str) -> None:
     )
     console.print(Panel(body, border_style="bright_blue", padding=(0, 1), width=48))
     console.print()
+
+
+def print_system_text(text: str) -> None:
+    """
+    Echo a piece of system-injected text (reminder / job notification) in a uniform dim style.
+    """
+    print_step("[dim]◇ system[/]", f"[dim]{text[:200]}[/]")

@@ -33,6 +33,8 @@ INSTRUCTIONS = (
     "Prefer edit_file for localized changes (sending only the modified snippets to save tokens); reserve write_file for creating new files or complete overwrites.\n"
     "Workflow: Understand requirements, implement code, and run tests/commands to verify. "
     "Fix any errors and re-verify until confirmed correct.\n"
+    "Run persistent or long-running commands (e.g., dev servers, long test suites) in the background using run_command with run_in_background=True—use this only when immediate results are not required, without appending '&'. "
+    "You will receive a <task-notification> when a background job finishes, so do not actively poll. You can inspect partial output using read_file on its log file, or terminate it early with job_kill.\n"
     "When handling tasks requiring more than 3 steps or multiple tool calls, "
     "first use task_create to break down steps into pending tasks. Before starting work on a task, use task_update to switch its status to in_progress, and mark it completed immediately upon finishing. "
     "Do not create tasks for trivial requests (1–2 steps, pure conversation, simple queries), as this adds unnecessary overhead. Never leave completed tasks lingering in in_progress.\n"

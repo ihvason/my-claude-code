@@ -27,7 +27,7 @@ from rich.markup import escape
 
 import permissions
 from mentions import list_candidate_files
-from .render import console
+from .render import console, print_system_text
 
 # Persistent input area: remains pinned to the bottom throughout the session.
 # Agent output streams above via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.
@@ -67,6 +67,8 @@ class Repl:
         self.state = state
         # Injected by main: async handler for submitted input (slash commands or agent queries)
         self._on_submit = None
+        # Injected by main: async handler for system-triggered turns (e.g. background job notices)
+        self._on_system = None
         # Background task handling current input; targets ESC / Ctrl+C cancellation. None when idle.
         self._task = None
         # Tracks active model execution to toggle the working indicator
@@ -97,12 +99,20 @@ class Repl:
         # Header above the input prompt: spinner + elapsed time + cancellation hint (active only during requests)
         frame = _SPINNER[self._frame % len(_SPINNER)]
         elapsed = int(time.monotonic() - self._work_start)
-        return HTML(f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · press esc to cancel)</ansibrightblack>")
+        hint = ""
+        if self.state.job_registry.running(background=False):
+            hint = " · ctrl+b to background"
+        return HTML(f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · esc to cancel{hint})</ansibrightblack>")
 
     def _mode_line(self):
-        # Footer below the input prompt: active permission mode + keybinding hint
+        # Row below the input bar: current permission mode + cycle hint, plus the running
+        # background-job count
         mode = permissions.state.mode
-        return HTML(f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta><ansibrightblack>(Shift+Tab to cycle)</ansibrightblack>")
+        line = f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta><ansibrightblack>(Shift+Tab to cycle)</ansibrightblack>"
+        running = len(self.state.job_registry.running(background=True))
+        if running:
+            line += f"<ansibrightblack> · </ansibrightblack><ansicyan>{running} shell</ansicyan>"
+        return HTML(line)
 
     def _divider(self):
         # Horizontal divider
@@ -189,6 +199,12 @@ class Repl:
             # Cycle through permission modes
             permissions.cycle_mode()
 
+        @kb.add("c-b")
+        def _(event):
+            # Move a running foreground command to the background; the tool call returns
+            # immediately with a job id
+            self.state.job_registry.move_to_background()
+
         return kb
 
     def _on_enter(self):
@@ -219,10 +235,11 @@ class Repl:
         console.print(f"[bright_black]{rule}[/]")
         console.print()
 
-    async def _process(self, text):
-        # Background task: delegates to on_submit, handling cancellation and runtime exceptions
+    async def _process(self, text, handler=None):
+        # Background task: delegates to the given turn handler (on_submit by default),
+        # handling cancellation and runtime exceptions
         try:
-            await self._on_submit(text)
+            await (handler or self._on_submit)(text)
         except asyncio.CancelledError:
             console.print("\n[bold yellow]Interrupted[/]\n")
         except Exception as e:
@@ -249,9 +266,22 @@ class Repl:
         # Shut down persistent input area (used by /exit)
         self.app.exit()
 
-    async def run(self, on_submit):
+    @property
+    def is_idle(self):
+        return self._task is None
+
+    def submit_system(self, text) -> None:
+        """
+        Submit a system-triggered turn (e.g. a background job completion notice); the
+        caller must check is_idle first.
+        """
+        print_system_text(text)
+        self._task = self.app.create_background_task(self._process(text, self._on_system))
+
+    async def run(self, on_submit, on_system):
         # Run REPL event loop until exited; on_submit is the async handler for input lines
         self._on_submit = on_submit
+        self._on_system = on_system
         # Heartbeat loop for spinner re-rendering during active requests
         ticker = asyncio.ensure_future(self._tick())
         try:

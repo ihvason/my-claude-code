@@ -1,30 +1,90 @@
 """
-shell tools: run_command. Its self-check requires approval for dangerous commands
-and auto-approves simple read-only ones.
+shell tools: run_command and job_kill. The run_command self-check requires approval for
+dangerous commands and auto-approves simple read-only ones.
 """
+import asyncio
 import re
 import shlex
-import subprocess
+import time
+
+from pydantic_ai import RunContext
+from pydantic_ai.exceptions import ModelRetry
 
 import permissions
 
+from ..deps import AgentDeps
 
-def run_command(command: str) -> str:
+FOREGROUND_TIMEOUT = 10
+
+
+async def run_command(
+    ctx: RunContext[AgentDeps], command: str, run_in_background: bool = False
+) -> str:
     """
-    Run a shell command and return its output.
+    Run a shell command. Runs in the foreground by default and returns the output directly.
+
+    For long-running or slow commands (dev servers, long test suites), pass
+    run_in_background=True, and only when you do not need the result immediately: the
+    call returns a job id at once (do not append "&" to the command), and you receive a
+    <task-notification> when the job finishes - do not poll or wait for it. Meanwhile you
+    can read the job's log file with read_file at any time to inspect partial output.
+
+    Args:
+        command: the shell command to run
+        run_in_background: run as a background job instead of waiting for it to finish
     """
+    registry = ctx.deps.job_registry
+    # Foreground commands also go through the registry, so the user can press ctrl+b to
+    # move them to the background at any time
+    job = await registry.spawn_shell(command, background=run_in_background)
+    if run_in_background:
+        return _background_notice(job, f"Moved to the background, job id: {job.id}")
+
+    start = time.monotonic()
     try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, errors="replace", timeout=10
-        )
-        output = result.stdout
-        if result.returncode != 0:
-            output += f"\n[error] {result.stderr}"
-        return output or "(no output)"
-    except subprocess.TimeoutExpired:
-        return "[error] command timed out after 10 seconds"
-    except OSError as e:
-        return f"[error] failed to execute command ({e})"
+        while job.status == "running" and not job.background:
+            if time.monotonic() - start > FOREGROUND_TIMEOUT:
+                registry.kill(job.id)
+                return f"[error] command timed out after {FOREGROUND_TIMEOUT}s; for long-running or slow commands, re-run with run_in_background=True"
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        # When the user cancels this turn with Esc, terminate the foreground command too
+        # so no orphaned process is left behind
+        registry.kill(job.id)
+        raise
+
+    if job.background:
+        return _background_notice(job, f"The user moved this command to the background; it continues as job {job.id}")
+
+    output = job.log_path.read_text(errors="replace")
+    if job.returncode != 0:
+        output += f"\n[error] exit code {job.returncode}"
+    return output or "(no output)"
+
+
+def _background_notice(job, lead: str) -> str:
+    # Reply tail shared by explicit background runs and ctrl+b moves
+    return (
+        f"{lead}\n"
+        f"Log file: {job.log_path} (inspect it any time with read_file)\n"
+        "You will receive a <task-notification> when it finishes; do not wait for it."
+    )
+
+
+def job_kill(ctx: RunContext[AgentDeps], job_id: str) -> str:
+    """
+    Terminate a running background job (its entire process tree is terminated).
+
+    Args:
+        job_id: id of the job to terminate (e.g. "b3k9f02qx")
+    """
+    registry = ctx.deps.job_registry
+    job = registry.get(job_id)
+    if job is None:
+        raise ModelRetry(f"job {job_id} does not exist")
+    if not registry.kill(job_id):
+        return f"job {job_id} has already finished ({job.status}); nothing to terminate"
+    return f"job {job_id} terminated"
 
 
 # Danger signatures: file deletion, privilege escalation, raw disk writes
@@ -58,9 +118,9 @@ def is_readonly_command(command: str) -> bool:
 
 def run_command_self_check(args: dict):
     """
-    Permission self-check for run_command: require approval when a danger
-    signature matches, auto-approve a confirmed read-only command, and defer
-    everything else to the general rules.
+    Permission self-check for run_command: require approval when a danger signature
+    matches, auto-approve a confirmed read-only command, and defer everything else to
+    the general rules.
     """
     command = args.get("command", "")
     if any(re.search(pattern, command) for pattern in DANGEROUS_PATTERNS):

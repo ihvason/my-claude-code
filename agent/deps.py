@@ -10,9 +10,12 @@ from .file_state import ReadFileState
 
 from file_history import FileHistory
 
+from background_jobs import JobRegistry
+
 
 @dataclass
 class AgentDeps:
     read_file_state: ReadFileState
     tasks_store: TasksStore
     file_history: FileHistory | None = None
+    job_registry: JobRegistry | None = None

@@ -16,7 +16,7 @@ from pydantic_ai import Tool
 from . import shell as _shell  # noqa: F401
 from .ask_user import ask_user_question
 from .file import read_and_register, read_file, edit_file, write_file
-from .shell import run_command
+from .shell import job_kill, run_command
 from .tasks import task_create, task_get, task_list, task_update
 
 # edit_file and write_file are marked sequential=True: multiple file edits in one
@@ -29,6 +29,7 @@ TOOLS = [
     Tool(edit_file, sequential=True),
     Tool(write_file, sequential=True),
     run_command,
+    job_kill,
     task_create,
     task_list,
     task_get,

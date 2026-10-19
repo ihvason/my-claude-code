@@ -22,6 +22,7 @@ import permissions
 import session
 from agent import ReadFileState
 from file_history import FileHistory
+from background_jobs import JobRegistry
 from memory import background, store
 from tasks_store import TasksStore
 from .render import console, print_step, print_welcome_banner
@@ -74,6 +75,9 @@ class SessionState:
     pending_input: str = ""
     # Consecutive automatic-compaction failures; retrying stops once this reaches the limit
     compact_failures: int = 0
+    # This session's background job registry, injected into the shell tools; constructed
+    # by main and passed in
+    job_registry: JobRegistry | None = None
 
 
 @dataclass
@@ -276,6 +280,17 @@ def cmd_help(state: SessionState) -> bool:
     return True
 
 
+def _swap_job_registry(state: SessionState) -> JobRegistry:
+    """
+    Terminate jobs still running in the old session (real processes tied to that
+    session) and return a fresh registry.
+    """
+    killed = state.job_registry.shutdown()
+    if killed:
+        console.print(f"[dim]Terminated {killed} still-running background job(s)[/]")
+    return JobRegistry(session_id=state.session_id)
+
+
 def cmd_new(state: SessionState) -> bool:
     """
     Start a new session: clear history, token counters and API call records, and
@@ -303,6 +318,8 @@ def cmd_new(state: SessionState) -> bool:
     # File checkpoints are also session-scoped; a new session records from scratch
     state.file_history = FileHistory(session_id=state.session_id)
     state.compact_failures = 0
+    # Background jobs do not cross sessions: terminate the old ones and swap in a new registry
+    state.job_registry = _swap_job_registry(state)
     console.print("Started a new session\n")
     return True
 
@@ -383,6 +400,9 @@ async def cmd_resume(state: SessionState) -> bool:
     # that session's checkpoints.json, making old checkpoints usable immediately
     state.file_history = FileHistory(session_id=state.session_id)
     state.compact_failures = 0
+    # Background jobs do not cross sessions: terminate the old ones; the resumed session
+    # starts with an empty registry
+    state.job_registry = _swap_job_registry(state)
 
     # Add up the restored session's token usage
     _recount_tokens(state)
@@ -766,6 +786,21 @@ def cmd_mcp(state: SessionState) -> bool:
     return True
 
 
+def cmd_jobs(state: SessionState) -> bool:
+    """
+    List this session's background jobs and their status.
+    """
+    jobs = [job for job in state.job_registry.list() if job.background]
+    if not jobs:
+        console.print("(No background jobs in this session yet)\n")
+        return True
+    for job in jobs:
+        console.print(f"  {job.id} {escape(f'[{job.status}]')} {escape(job.description)}")
+        console.print(f"      log: {job.log_path}")
+    console.print()
+    return True
+
+
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
     "resume": Command("resume", "resume a past session", cmd_resume),
@@ -774,7 +809,8 @@ COMMANDS = {
     "status": Command("status", "show the current session state", cmd_status),
     "memory": Command("memory", "view long-term memory", cmd_memory),
     "dream": Command("dream", "consolidate long-term memory now", cmd_dream),
-    "mcp": Command("mcp", "查看 MCP server 状态和工具", cmd_mcp),
+    "mcp": Command("mcp", "show MCP server status and tools", cmd_mcp),
+    "jobs": Command("jobs", "list background jobs", cmd_jobs),
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
     "exit": Command("exit", "quit the program", cmd_exit),
