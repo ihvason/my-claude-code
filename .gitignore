@@ -3,8 +3,12 @@
 __pycache__/
 *.py[cod]
 
-# API Key
-.env
+# Local secrets
+.env*
+!.env.example
 
 # macOS
 .DS_Store
+
+# Local data (sessions, tasks, jobs, memory)
+.my-claude-code/
