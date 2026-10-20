@@ -65,6 +65,9 @@ def build_job_reminder_text(registry: JobRegistry | None) -> str | None:
         color = "green" if job.status == "completed" else "red"
         console.print(f"[{color}]●[/] {escape(job.summary())}\n")
         summary = f"{job.summary()}, read the output file with read_file"
+        # Agent jobs carry a final report in result; include it so the main agent does
+        # not have to read the log
+        result = f"<result>{job.result}</result>\n" if job.result else ""
         blocks.append(
             "<task-notification>\n"
             f"<task-id>{job.id}</task-id>\n"
@@ -72,6 +75,7 @@ def build_job_reminder_text(registry: JobRegistry | None) -> str | None:
             f"<output-file>{job.log_path}</output-file>\n"
             f"<status>{job.status}</status>\n"
             f"<summary>{summary}</summary>\n"
+            f"{result}"
             "</task-notification>"
         )
     return "\n\n".join(blocks)

@@ -15,6 +15,7 @@ from pydantic_ai import Tool
 # would be auto-approved later in default mode
 from . import shell as _shell  # noqa: F401
 from .ask_user import ask_user_question
+from .agents import run_agent
 from .file import read_and_register, read_file, edit_file, write_file
 from .shell import job_kill, run_command
 from .tasks import task_create, task_get, task_list, task_update
@@ -30,6 +31,7 @@ TOOLS = [
     Tool(write_file, sequential=True),
     run_command,
     job_kill,
+    run_agent,
     task_create,
     task_list,
     task_get,

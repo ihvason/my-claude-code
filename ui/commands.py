@@ -20,6 +20,7 @@ import compact
 import mcp_servers
 import permissions
 import session
+import subagents
 from agent import ReadFileState
 from file_history import FileHistory
 from background_jobs import JobRegistry
@@ -800,6 +801,19 @@ def cmd_jobs(state: SessionState) -> bool:
     return True
 
 
+def cmd_agents(state: SessionState) -> bool:
+    """
+    List the agent types available to run_agent.
+    """
+    for atype in subagents.list_agent_types():
+        source = "built-in" if atype.source == "built-in" else f"custom: {atype.source}"
+        console.print(f"  [bold]{atype.name}[/] [bright_black]({source})[/]")
+        console.print(f"      {escape(atype.description)}")
+        console.print(f"      [bright_black]Tools: {', '.join(atype.tool_names)}[/]")
+    console.print()
+    return True
+
+
 COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
     "resume": Command("resume", "resume a past session", cmd_resume),
@@ -812,5 +826,6 @@ COMMANDS = {
     "jobs": Command("jobs", "list background jobs", cmd_jobs),
     "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
     "help": Command("help", "list available commands", cmd_help),
+    "agents": Command("agents", "list the sub agent types available to run_agent", cmd_agents),
     "exit": Command("exit", "quit the program", cmd_exit),
 }

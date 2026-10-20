@@ -199,9 +199,10 @@ class _ApprovalPicker:
         return self.result if self.result is not None else "deny"
 
 
-async def prompt_approval(tool_name: str, args: dict) -> str:
+async def prompt_approval(tool_name: str, args: dict, requester: str = "") -> str:
     """
-    Prompts the user for approval before tool execution. Returns "once", "always", or "deny".
+    Show the approval picker before a tool runs; returns "once", "always" or "deny".
+    A requester prefix identifies approval requests that come from a sub agent.
     """
     options = [
         ("once", "Allow once"),
@@ -209,6 +210,6 @@ async def prompt_approval(tool_name: str, args: dict) -> str:
         ("deny", "Deny"),
     ]
     async with in_terminal():
-        question = f"Allow {_format_call(tool_name, args)}?"
+        question = f"{requester}Allow {_format_call(tool_name, args)}?"
         choice = await _ApprovalPicker(question, options).run()
     return choice

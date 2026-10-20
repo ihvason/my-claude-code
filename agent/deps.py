@@ -10,7 +10,7 @@ from .file_state import ReadFileState
 
 from file_history import FileHistory
 
-from background_jobs import JobRegistry
+from background_jobs import Job, JobRegistry
 
 
 @dataclass
@@ -19,3 +19,6 @@ class AgentDeps:
     tasks_store: TasksStore
     file_history: FileHistory | None = None
     job_registry: JobRegistry | None = None
+    # Set only on sub agent runs: points at its own job, used to identify the requester
+    # when an approval request bubbles up to the user
+    subagent_job: Job | None = None

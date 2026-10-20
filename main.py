@@ -14,6 +14,8 @@ from pydantic_graph import End
 import session
 import compact
 import mcp_servers
+import subagents
+import permissions
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from agent.reminders import build_job_reminder_text
@@ -149,6 +151,12 @@ async def main():
     )
     print_welcome_banner("my-claude-code")
 
+    # Load custom agent definitions from <repo>/.my-claude-code/agents/
+    custom_agents = subagents.load_agent_types()
+    if custom_agents:
+        names = ", ".join(a.name for a in custom_agents)
+        console.print(f"[dim]Loaded {len(custom_agents)} custom agent(s): {names}[/]\n")
+
     # Spinner while connecting; otherwise a cold start that fetches packages looks like a hang
     with console.status("Connecting MCP server..."):
         mcp_summary = await mcp_servers.startup()
@@ -216,23 +224,48 @@ async def main():
 
     async def watch_jobs():
         # Idle wake-up: if a job finishes while the REPL is idle, submit the notice as a
-        # system turn so the model reports it
-        try:
-            while True:
+        # system turn so the model reports it. A single failed notification must not kill
+        # the watcher for the rest of the session.
+        while True:
+            try:
                 await asyncio.sleep(1)
                 if not repl.is_idle:
                     continue
                 text = build_job_reminder_text(state.job_registry)
                 if text:
                     repl.submit_system(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                console.print(f"[yellow]Job notification failed: {type(e).__name__}: {e}[/]\n")
+
+    async def watch_approvals():
+        # Approval requests bubbling up from sub agents: while the REPL is idle, show the
+        # approval picker and resolve the future the sub agent is waiting on
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                if not repl.is_idle:
+                    continue
+                req = subagents.pop_pending_approval()
+                if req is None:
+                    continue
+                choice = await permissions.prompt_approval(
+                    req.tool_name, req.args,
+                    requester=f"Sub agent {req.job.description!r} (job {req.job.id}) requests: ",
+                )
+                if not req.future.done():
+                    req.future.set_result(choice)
         except asyncio.CancelledError:
             pass
 
     job_watcher = asyncio.ensure_future(watch_jobs())
+    approval_watcher = asyncio.ensure_future(watch_approvals())
     try:
         await repl.run(on_submit, on_system)
     finally:
         job_watcher.cancel()
+        approval_watcher.cancel()
 
     # Before exiting, give in-flight background memory tasks time to finish;
     # killing extraction midway leaves half-written memories behind

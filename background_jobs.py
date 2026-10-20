@@ -19,10 +19,10 @@ from utils import get_session_dir
 _ID_ALPHABET = string.digits + string.ascii_lowercase
 
 
-def _new_job_id() -> str:
-    # Random ids instead of a counter: restarting the process or resuming a session
-    # can neither collide nor overwrite old logs
-    return "b" + "".join(random.choices(_ID_ALPHABET, k=8))
+def _new_job_id(prefix: str) -> str:
+    # Random ids instead of a counter: a restarted process or a resumed session cannot
+    # collide with or overwrite old logs. The prefix marks the job kind (b=shell, a=agent)
+    return prefix + "".join(random.choices(_ID_ALPHABET, k=8))
 
 
 JobStatus = Literal["running", "completed", "failed", "killed"]
@@ -37,7 +37,7 @@ _STATUS_TEXT = {
 @dataclass
 class Job:
     id: str
-    # Only "shell" for now; reserved for future subagent job kinds
+    # "shell" Or "agent"
     kind: str
     description: str
     # Job output is stored in a log file
@@ -50,6 +50,9 @@ class Job:
     background: bool = True
     # Termination callback injected by the creator
     kill_func: Callable[[], None] | None = None
+    # Final report for agent jobs; shell jobs leave it None (their output is the log file)
+    result: str | None = None
+
 
     def summary(self) -> str:
         """
@@ -58,7 +61,8 @@ class Job:
         detail = _STATUS_TEXT[self.status]
         if self.returncode is not None:
             detail += f" (exit code {self.returncode})"
-        return f"Background command {self.description!r} {detail}"
+        noun = "sub agent" if self.kind == "agent" else "shell"
+        return f"{noun} {self.description!r} {detail}"
 
 
 class JobRegistry:
@@ -67,15 +71,24 @@ class JobRegistry:
     hands "finished but not yet notified" jobs to the notifier.
     """
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, jobs_dir: Path | None = None):
         self.session_id = session_id
         self._jobs: dict[str, Job] = {}
-        self._jobs_dir = get_session_dir(session_id) / "jobs"
+        # Defaults to the session bundle's jobs/ directory. A sub agent passes an
+        # explicit directory so its jobs nest under the job that spawned it.
+        self._jobs_dir = jobs_dir if jobs_dir is not None else get_session_dir(session_id) / "jobs"
         # Hold watcher references so they are not garbage-collected and cancelled early
         self._watchers: set = set()
 
+    @property
+    def jobs_dir(self) -> Path:
+        """
+        Directory holding this registry's job log files.
+        """
+        return self._jobs_dir
+
     async def spawn_shell(self, command: str, background: bool = True) -> Job:
-        job_id = _new_job_id()
+        job_id = _new_job_id("b")
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
         log_path = self._jobs_dir / f"{job_id}.log"
         log_file = open(log_path, "wb")
@@ -109,6 +122,39 @@ class JobRegistry:
             return
         job.returncode = returncode
         job.status = "completed" if returncode == 0 else "failed"
+
+    async def spawn_agent(self, description: str, run) -> Job:
+        """
+        Sibling of spawn_shell: creates an agent-type job (always backgrounded). `run`
+        is an async function that receives the Job, does the work and fills job.result.
+        """
+        job_id = _new_job_id("a")
+        self._jobs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self._jobs_dir / f"{job_id}.log"
+        log_path.touch()
+        job = Job(id=job_id, kind="agent", description=description, log_path=log_path)
+        task = asyncio.create_task(run(job))
+        # Killing a shell job terminates its process tree; killing an agent job cancels
+        # its coroutine
+        job.kill_func = task.cancel
+        self._jobs[job_id] = job
+        watcher = asyncio.create_task(self._watch_agent(job, task))
+        self._watchers.add(watcher)
+        watcher.add_done_callback(self._watchers.discard)
+        return job
+
+    async def _watch_agent(self, job: Job, task: asyncio.Task) -> None:
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            job.result = f"Sub agent run failed: {type(e).__name__}: {e}"
+            status = "failed"
+        else:
+            status = "completed"
+        if job.status == "running":
+            job.status = status
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)

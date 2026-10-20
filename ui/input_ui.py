@@ -105,13 +105,15 @@ class Repl:
         return HTML(f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · esc to cancel{hint})</ansibrightblack>")
 
     def _mode_line(self):
-        # Row below the input bar: current permission mode + cycle hint, plus the running
-        # background-job count
+        # Line under the input box: current permission mode and switch hint, plus a
+        # running background job count per kind
         mode = permissions.state.mode
-        line = f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta><ansibrightblack>(Shift+Tab to cycle)</ansibrightblack>"
-        running = len(self.state.job_registry.running(background=True))
-        if running:
-            line += f"<ansibrightblack> · </ansibrightblack><ansicyan>{running} shell</ansicyan>"
+        line = f"  <ansimagenta><b>▶▶ {mode}</b></ansimagenta><ansibrightblack>(Shift+Tab to switch)</ansibrightblack>"
+        running = self.state.job_registry.running(background=True)
+        for kind in ("shell", "agent"):
+            count = sum(1 for job in running if job.kind == kind)
+            if count:
+                line += f"<ansibrightblack> · </ansibrightblack><ansicyan>{count} {kind}</ansicyan>"
         return HTML(line)
 
     def _divider(self):

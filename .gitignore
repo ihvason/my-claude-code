@@ -10,5 +10,7 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Local data (sessions, tasks, jobs, memory)
-.my-claude-code/
+# Local data (sessions, tasks, jobs, memory); agent definitions under agents/ are tracked
+.my-claude-code/*
+!.my-claude-code/agents/
+!.my-claude-code/agents/**

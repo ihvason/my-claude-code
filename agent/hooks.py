@@ -168,7 +168,12 @@ async def _inject_reminders(ctx, request_context):
     messages = list(request_context.messages)
     appended = []
     for builder in _REMINDER_BUILDERS:
-        text = builder(ctx, messages + appended)
+        try:
+            text = builder(ctx, messages + appended)
+        except Exception as e:
+            # One broken reminder must not fail the whole model request
+            console.print(f"[yellow]Reminder {builder.__name__} failed: {type(e).__name__}: {e}[/]\n")
+            continue
         if text is None:
             continue
         appended.append(ModelRequest(parts=[UserPromptPart(content=text)]))
