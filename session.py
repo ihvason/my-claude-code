@@ -131,10 +131,9 @@ def load_history(session_id: str) -> list:
 
 def first_prompt(path: Path) -> str:
     """
-    Find the first genuine user prompt at the start of a transcript, used as the
-    session summary for bundles written before meta.json existed.
-    Recalled memories and @ mentions may precede it, so system-reminder and
-    task-notification content is skipped.
+    Find the first genuine user prompt at the start of the file, used as the session summary.
+    Recalled memories, @ mentions and job notifications may precede it, so system-reminder,
+    task-notification and monitor-event content is skipped and extra lines are read as needed.
     """
     with open(path, encoding="utf-8") as f:
         for _ in range(20):
@@ -146,7 +145,7 @@ def first_prompt(path: Path) -> str:
                 if part.get("part_kind") != "user-prompt":
                     continue
                 content = str(part.get("content", ""))
-                if content.startswith(("<system-reminder>", "<task-notification>")):
+                if content.startswith(("<system-reminder>", "<task-notification>", "<monitor-event>")):
                     continue
                 return content
     return "(empty session)"

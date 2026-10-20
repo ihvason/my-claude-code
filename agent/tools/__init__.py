@@ -18,6 +18,7 @@ from .ask_user import ask_user_question
 from .agents import run_agent
 from .file import read_and_register, read_file, edit_file, write_file
 from .shell import job_kill, run_command
+from .monitor import monitor
 from .tasks import task_create, task_get, task_list, task_update
 
 # edit_file and write_file are marked sequential=True: multiple file edits in one
@@ -30,6 +31,7 @@ TOOLS = [
     Tool(edit_file, sequential=True),
     Tool(write_file, sequential=True),
     run_command,
+    monitor,
     job_kill,
     run_agent,
     task_create,

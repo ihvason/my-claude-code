@@ -1,6 +1,8 @@
 """
 Constructs system-reminder text. Actual injection is hooked in agent/hooks.py.
 """
+from html import escape as escape_xml
+
 from rich.markup import escape
 
 from background_jobs import JobRegistry
@@ -79,3 +81,45 @@ def build_job_reminder_text(registry: JobRegistry | None) -> str | None:
             "</task-notification>"
         )
     return "\n\n".join(blocks)
+
+
+def build_monitor_event_text(registry: JobRegistry | None) -> str | None:
+    """
+    Render the event lines each monitor has buffered since the last call as
+    <monitor-event> notices; returns None when there is nothing new.
+    """
+    if registry is None:
+        return None
+    popped = registry.pop_events()
+    if not popped:
+        return None
+    blocks = []
+    for job, events, dropped in popped:
+        notice = f"monitor {escape(job.description)!r}: {len(events)} new event(s)"
+        if dropped:
+            notice += f" ({dropped} more omitted)"
+        console.print(f"[cyan]●[/] {notice}\n")
+        omitted = (
+            f"<dropped>{dropped} event(s) were omitted because output came too fast; "
+            "remount with a tighter filter if you need them</dropped>\n"
+        ) if dropped else ""
+        description = escape_xml(job.description, quote=False)
+        event_text = escape_xml(chr(10).join(events), quote=False)
+        blocks.append(
+            "<monitor-event>\n"
+            f"<task-id>{job.id}</task-id>\n"
+            f"<description>{description}</description>\n"
+            f"<events>\n{event_text}\n</events>\n"
+            f"{omitted}"
+            "</monitor-event>"
+        )
+    return "\n\n".join(blocks)
+
+
+def build_job_notifications(registry: JobRegistry | None) -> str | None:
+    """
+    The registry's single notification entry point: finished jobs plus monitor events, so
+    both delivery paths ask one function.
+    """
+    parts = [build_job_reminder_text(registry), build_monitor_event_text(registry)]
+    return "\n\n".join(p for p in parts if p) or None

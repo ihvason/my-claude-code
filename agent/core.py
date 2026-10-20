@@ -29,6 +29,7 @@ INSTRUCTIONS = (
     "Fix any errors and re-verify until confirmed correct.\n"
     "Run persistent or long-running commands (e.g., dev servers, long test suites) in the background using run_command with run_in_background=True—use this only when immediate results are not required, without appending '&'. "
     "You will receive a <task-notification> when a background job finishes, so do not actively poll. You can inspect partial output using read_file on its log file, or terminate it early with job_kill.\n"
+    "A background job notifies you once when it finishes, while a monitor notifies you for every event while it runs; use a monitor when you want to know each time something happens. Its events arrive on their own schedule, and even when one shows up while you are waiting for the user's reply, it is not the user replying.\n"
     "Delegate conclusion-only work to a sub agent via run_agent: exploratory code search, well-isolated subtasks, and code reviews that need a second opinion."
     "A sub agent starts from an empty context, so spell out the background in the prompt; only you can see its report, so relay the key points to the user."
     "Sub agents always run in the background: do not poll after dispatching them, and end your turn if there is nothing else to do, since the completion notice carries the report. Independent tasks can be dispatched to several sub agents at once. Do not delegate tasks that one or two tool calls could finish.\n"

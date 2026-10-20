@@ -10,11 +10,21 @@ import random
 import signal
 import string
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
+import time
 
 from utils import get_session_dir
+
+# Event rate limits for monitors: lines beyond the window budget, or arriving when the queue
+# is already full, are only counted; once the cumulative drop count hits its cap the monitor
+# stops itself
+EVENT_WINDOW = 10.0
+MAX_EVENTS_PER_WINDOW = 20
+MAX_PENDING_EVENTS = 200
+MAX_DROPPED_EVENTS = 100
+MAX_EVENT_CHARS = 500
 
 _ID_ALPHABET = string.digits + string.ascii_lowercase
 
@@ -26,6 +36,7 @@ def _new_job_id(prefix: str) -> str:
 
 
 JobStatus = Literal["running", "completed", "failed", "killed"]
+JobKind = Literal["shell", "agent", "monitor"]
 
 _STATUS_TEXT = {
     "completed": "succeeded",
@@ -38,7 +49,7 @@ _STATUS_TEXT = {
 class Job:
     id: str
     # "shell" Or "agent"
-    kind: str
+    kind: JobKind
     description: str
     # Job output is stored in a log file
     log_path: Path
@@ -52,6 +63,13 @@ class Job:
     kill_func: Callable[[], None] | None = None
     # Final report for agent jobs; shell jobs leave it None (their output is the log file)
     result: str | None = None
+    # Event lines a monitor has buffered but not pushed yet. dropped_events counts the drops
+    # reported with the next notice; dropped_total never decreases and drives the breaker
+    pending_events: list[str] = field(default_factory=list)
+    dropped_events: int = 0
+    dropped_total: int = 0
+    window_start: float = 0.0
+    window_count: int = 0
 
 
     def summary(self) -> str:
@@ -61,8 +79,25 @@ class Job:
         detail = _STATUS_TEXT[self.status]
         if self.returncode is not None:
             detail += f" (exit code {self.returncode})"
-        noun = "sub agent" if self.kind == "agent" else "shell"
+        noun = {"agent": "sub agent", "monitor": "monitor"}.get(self.kind, "shell")
         return f"{noun} {self.description!r} {detail}"
+
+
+    def push_event(self, line: str) -> None:
+        """
+        Queue one event line, subject to rate limits: lines beyond the window budget, or
+        arriving when the queue is full, only increment the drop counters.
+        """
+        now = time.monotonic()
+        if now - self.window_start >= EVENT_WINDOW:
+            self.window_start = now
+            self.window_count = 0
+        self.window_count += 1
+        if self.window_count > MAX_EVENTS_PER_WINDOW or len(self.pending_events) >= MAX_PENDING_EVENTS:
+            self.dropped_events += 1
+            self.dropped_total += 1
+            return
+        self.pending_events.append(line[:MAX_EVENT_CHARS])
 
 
 class JobRegistry:
@@ -92,13 +127,8 @@ class JobRegistry:
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
         log_path = self._jobs_dir / f"{job_id}.log"
         log_file = open(log_path, "wb")
-        # A separate process group is required to terminate descendants as a whole
-        if os.name == "nt":
-            group_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        else:
-            group_kwargs = {"start_new_session": True}
         proc = await asyncio.create_subprocess_shell(
-            command, stdout=log_file, stderr=subprocess.STDOUT, **group_kwargs
+            command, stdout=log_file, stderr=subprocess.STDOUT, **_process_group_kwargs()
         )
         pid = proc.pid
         job = Job(
@@ -156,6 +186,95 @@ class JobRegistry:
         if job.status == "running":
             job.status = status
 
+    async def spawn_monitor(self, command: str, description: str, timeout: float | None) -> Job:
+        """
+        Third spawn method: run the command as a monitor-type job whose non-empty stdout
+        lines become events. A None timeout keeps it running until it is terminated.
+        """
+        job_id = _new_job_id("m")
+        self._jobs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self._jobs_dir / f"{job_id}.log"
+        # Key difference from spawn_shell: output is read line by line through a PIPE and
+        # turned into events
+        proc = await asyncio.create_subprocess_shell(
+            command, stdout=asyncio.subprocess.PIPE, stderr=subprocess.STDOUT,
+            limit=1024 * 1024, **_process_group_kwargs()
+        )
+        pid = proc.pid
+        job = Job(
+            id=job_id,
+            kind="monitor",
+            description=description,
+            log_path=log_path,
+            kill_func=lambda: _kill_process_tree(pid),
+        )
+        self._jobs[job_id] = job
+        watcher = asyncio.create_task(self._pump_monitor(job, proc, timeout))
+        self._watchers.add(watcher)
+        watcher.add_done_callback(self._watchers.discard)
+        return job
+
+    async def _pump_monitor(
+        self, job: Job, proc: asyncio.subprocess.Process, timeout: float | None
+    ) -> None:
+        timer = asyncio.create_task(self._monitor_timeout(job, timeout)) if timeout is not None else None
+        # Line buffered, so the model can read_file and see output as soon as it is produced
+        log_file = open(job.log_path, "w", encoding="utf-8", buffering=1)
+        try:
+            # Each line is both written to the log and queued as an event for the model
+            try:
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip("\r\n")
+                    log_file.write(line + "\n")
+                    if not line:
+                        continue
+                    job.push_event(line)
+                    if job.dropped_total >= MAX_DROPPED_EVENTS:
+                        self._stop_monitor(job, "monitor stopped: too much output; remount with a tighter filter")
+                        break
+            except ValueError:
+                # An overlong single line stops the monitor and produces a final event
+                self._stop_monitor(job, "monitor stopped: a single line was too long; truncate or filter it in the command")
+                await proc.wait()
+                return
+            returncode = await proc.wait()
+            if job.status == "killed":
+                return
+            job.returncode = returncode
+            job.status = "completed" if returncode == 0 else "failed"
+            # The exit message also goes through the event channel; marking it notified keeps
+            # it from being sent again as a job completion notice
+            job.notified = True
+            job.pending_events.append(f"[monitor stopped: the watched command exited on its own, exit code {returncode}]")
+        finally:
+            log_file.close()
+            if timer:
+                timer.cancel()
+
+    async def _monitor_timeout(self, job: Job, timeout: float) -> None:
+        await asyncio.sleep(timeout)
+        if job.status == "running":
+            self._stop_monitor(job, f"monitor stopped: reached the {int(timeout)}s timeout; remount if you still need it")
+
+    def _stop_monitor(self, job: Job, note: str) -> None:
+        # The stop notice is queued directly, bypassing the rate limit
+        job.pending_events.append(f"[{note}]")
+        self.kill(job.id)
+
+    def pop_events(self) -> list[tuple[Job, list[str], int]]:
+        """
+        Take and clear the events each monitor has buffered, so the two notification
+        channels cannot deliver the same line twice.
+        """
+        out = []
+        for job in self._jobs.values():
+            if not job.pending_events and not job.dropped_events:
+                continue
+            out.append((job, job.pending_events, job.dropped_events))
+            job.pending_events = []
+            job.dropped_events = 0
+        return out
+
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
@@ -207,6 +326,13 @@ class JobRegistry:
         for job in running:
             self.kill(job.id)
         return len(running)
+
+
+def _process_group_kwargs() -> dict:
+    # Start a separate process group so descendants can be terminated together
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 def _kill_process_tree(pid: int) -> None:

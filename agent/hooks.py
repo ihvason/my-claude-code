@@ -18,7 +18,7 @@ import classifier
 import permissions
 from ui.render import console, print_step
 
-from .reminders import build_job_reminder_text, build_reminder_text, build_task_reminder_text
+from .reminders import build_job_notifications, build_reminder_text, build_task_reminder_text
 
 
 MAX_RETRIES = 3
@@ -145,7 +145,7 @@ def _build_task_reminder(ctx, messages) -> str | None:
 def _build_job_reminder(ctx, messages) -> str | None:
     # Background jobs that finished during a turn are reported just before the next
     # model request
-    return build_job_reminder_text(ctx.deps.job_registry)
+    return build_job_notifications(ctx.deps.job_registry)
 
 
 # Registered reminder builders executed in before_model_request: (sentinel, builder) pairs.

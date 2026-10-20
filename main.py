@@ -18,7 +18,7 @@ import subagents
 import permissions
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
-from agent.reminders import build_job_reminder_text
+from agent.reminders import build_job_notifications
 from tasks_store import TasksStore
 from file_history import FileHistory
 from background_jobs import JobRegistry
@@ -231,7 +231,7 @@ async def main():
                 await asyncio.sleep(1)
                 if not repl.is_idle:
                     continue
-                text = build_job_reminder_text(state.job_registry)
+                text = build_job_notifications(state.job_registry)
                 if text:
                     repl.submit_system(text)
             except asyncio.CancelledError:

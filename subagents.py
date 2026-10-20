@@ -131,7 +131,7 @@ async def _sub_job_notifications(ctx, request_context):
 
 # ---------- Agent type definitions ----------
 
-# Every tool a sub agent may use; run_agent, ask_user_question, task_* and job_kill are excluded
+# Every tool a sub agent may use; run_agent, ask_user_question, task_*, job_kill and monitor are excluded
 _TOOL_FUNCS = {
     "read_file": read_file,
     "edit_file": edit_file,
