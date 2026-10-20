@@ -31,7 +31,7 @@ from agent.tools.file import edit_file, read_file, write_file
 from agent.tools.shell import run_command
 from background_jobs import Job, JobRegistry
 from memory.store import _parse_frontmatter
-from utils import get_data_dir
+from utils import find_agents_md, get_data_dir
 
 # Maximum number of model requests per sub agent run, so a runaway loop cannot spin forever
 MAX_SUBAGENT_REQUESTS = 40
@@ -172,10 +172,10 @@ def _sub_env_context() -> str:
         f"- Operating system: {platform.system()}",
         f"- Today's date: {date.today().isoformat()}",
     ]
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(agents_md):
+    agents_md = find_agents_md(cwd)
+    if agents_md is not None:
         try:
-            content = open(agents_md, encoding="utf-8").read()
+            content = agents_md.read_text(encoding="utf-8")
         except OSError:
             content = ""
         if content.strip():

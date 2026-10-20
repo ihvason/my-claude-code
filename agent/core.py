@@ -13,6 +13,7 @@ import subagents
 
 from memory import store
 from memory.instructions import MEMORY_INSTRUCTIONS
+from utils import find_agents_md
 
 from .deps import AgentDeps
 from .hooks import hooks
@@ -62,11 +63,12 @@ def project_context() -> str:
         f"- Today's date: {date.today().isoformat()}",
     ]
 
-    # Read project-level guidelines from AGENTS.md in the root directory; append if present to enforce project conventions
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(agents_md):
+    # Read project-level guidelines from AGENTS.md at the project root; append them so
+    # the model follows the project's conventions
+    agents_md = find_agents_md(cwd)
+    if agents_md is not None:
         try:
-            content = open(agents_md, encoding="utf-8").read()
+            content = agents_md.read_text(encoding="utf-8")
         except OSError:
             content = ""
         if content.strip():

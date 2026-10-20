@@ -88,3 +88,35 @@ def get_session_dir(session_id: str) -> Path:
     can be deleted, backed up or moved as a single directory.
     """
     return get_sessions_dir() / session_id
+
+
+def find_agents_md(start: str | Path | None = None) -> Path | None:
+    """
+    Return the project-level AGENTS.md, or None when the project has none.
+
+    The project root is discovered by walking upward from `start` (default: the
+    current working directory), so launching the app from a subdirectory still finds
+    the file kept at the repository root. When no root marker exists above `start`,
+    the search keeps walking upward, which covers projects without .git,
+    pyproject.toml or uv.lock.
+
+    Args:
+        start: file or directory to begin the search from; defaults to the current
+            working directory.
+
+    Returns:
+        Absolute path of the AGENTS.md file, or None if it does not exist.
+    """
+    base = Path(start).resolve() if start is not None else Path.cwd().resolve()
+    if base.is_file():
+        base = base.parent
+    root = get_project_root(base)
+    # With a marker-based root the project-level file can only live there; without one,
+    # the real root may still sit further up the tree
+    marked = any((root / marker).exists() for marker in ROOT_MARKERS)
+    candidates = (root,) if marked else (root, *base.parents)
+    for candidate in candidates:
+        path = candidate / "AGENTS.md"
+        if path.is_file():
+            return path
+    return None
