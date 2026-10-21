@@ -184,8 +184,9 @@ async def main():
     if mcp_summary:
         console.print(mcp_summary + "\n")
 
-    # Persistent input bar: remains visible at the bottom throughout the session
-    repl = Repl(state)
+    # Persistent input bar: remains visible at the bottom throughout the session; the command
+    # table drives slash-command completion
+    repl = Repl(state, COMMANDS)
 
     async def on_submit(user_input, attachments):
         # Triggered on each Enter submission

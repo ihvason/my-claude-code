@@ -67,10 +67,54 @@ class AtFileCompleter(Completer):
                 yield Completion(path, start_position=-len(match.group(1)))
 
 
+class SlashCommandCompleter(Completer):
+    """
+    Autocomplete slash commands: yields matching command names while the input is still a
+    bare "/prefix" with no arguments typed yet.
+    """
+
+    def __init__(self, commands):
+        # Mapping of command name -> Command (name / description / handler / takes_args)
+        self.commands = commands
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        # Only complete the command word itself, never the arguments after it
+        if not text.startswith("/") or " " in text:
+            return
+        prefix = text[1:].lower()
+        for name in sorted(self.commands):
+            if not name.lower().startswith(prefix):
+                continue
+            yield Completion(
+                f"/{name}",
+                # Replace the whole "/prefix" with the full command name upon selection
+                start_position=-len(text),
+                display=name,
+                display_meta=self.commands[name].description,
+            )
+
+
+class InputCompleter(Completer):
+    """
+    Routes completion to slash commands or @ file references, whichever the input calls for.
+    """
+
+    def __init__(self, commands):
+        self._commands = SlashCommandCompleter(commands)
+        self._files = AtFileCompleter()
+
+    def get_completions(self, document, complete_event):
+        if document.text_before_cursor.startswith("/"):
+            yield from self._commands.get_completions(document, complete_event)
+            return
+        yield from self._files.get_completions(document, complete_event)
+
+
 class Repl:
     # Persistent input area; on_submit callback is injected by main to handle each input line
 
-    def __init__(self, state):
+    def __init__(self, state, commands=None):
         self.state = state
         # Injected by main: async handler for submitted input (slash commands or agent queries)
         self._on_submit = None
@@ -86,11 +130,12 @@ class Repl:
         self._pending_images = []
         # Guards against several clipboard reads running at once
         self._pasting = False
-        # Configure input buffer with AtFileCompleter; complete_while_typing enables inline popups without Tab
+        # Configure the input buffer with slash-command and @-file completion;
+        # complete_while_typing enables the inline popup without pressing Tab
         self._buffer = Buffer(
             multiline=False,
             history=InMemoryHistory(),
-            completer=AtFileCompleter(),
+            completer=InputCompleter(commands or {}),
             complete_while_typing=True,
         )
         self.app = self._build_app()
@@ -282,11 +327,29 @@ class Repl:
         self._buffer.reset()
         self._pending_images.clear()
 
+    def _accept_completion(self) -> bool:
+        """
+        Apply the completion under the cursor. Returns True when the key press was consumed
+        by completion and must not submit the line.
+        """
+        state = self._buffer.complete_state
+        if not state or not state.completions:
+            return False
+        # Autocompletion opens the menu without selecting an entry; Tab selects the first
+        # one, so Enter does the same instead of submitting the half-typed line
+        completion = state.current_completion or state.completions[0]
+        document = self._buffer.document
+        start = document.cursor_position + completion.start_position
+        if document.text[start:document.cursor_position] == completion.text:
+            # Applying it would change nothing, so this Enter means "submit"
+            return False
+        self._buffer.apply_completion(completion)
+        return True
+
     def _on_enter(self):
-        # With the completion menu open and an item highlighted, Enter accepts the
-        # completion instead of submitting
-        if self._buffer.complete_state and self._buffer.complete_state.current_completion:
-            self._buffer.apply_completion(self._buffer.complete_state.current_completion)
+        # With the completion menu open, Enter accepts the completion instead of submitting
+        if self._accept_completion():
+            self.app.invalidate()
             return
         # No new submission while a request is in flight (the input line stays visible,
         # Enter just does not start another turn)
