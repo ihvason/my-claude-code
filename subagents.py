@@ -22,6 +22,7 @@ from pydantic_graph import End
 
 import classifier
 import permissions
+import skills
 from agent.deps import AgentDeps
 from agent.file_state import ReadFileState
 from agent.hooks import _handle_tool_error, _retry_on_error
@@ -134,6 +135,7 @@ async def _sub_job_notifications(ctx, request_context):
 # Every tool a sub agent may use; run_agent, ask_user_question, task_*, job_kill and monitor are excluded
 _TOOL_FUNCS = {
     "read_file": read_file,
+    "load_skill": skills.load_skill,
     "edit_file": edit_file,
     "write_file": write_file,
     "run_command": run_command,
@@ -163,8 +165,8 @@ class AgentType:
 
 
 def _sub_env_context() -> str:
-    # Sub agent environment context: working directory, OS, date and the project's
-    # AGENTS.md only; no memory index and no task guidance
+    # Sub agent environment context: working directory, OS, date, the project's AGENTS.md and
+    # the skill listing only; no memory index and no task guidance
     cwd = os.getcwd()
     parts = [
         "Environment context:",
@@ -182,6 +184,13 @@ def _sub_env_context() -> str:
             parts.append("")
             parts.append("Project AGENTS.md guidelines (adhere to these conventions):")
             parts.append(content)
+
+    # Same progressive skill listing as the main agent: name + description now, full body
+    # through load_skill once a task matches
+    skill_listing = skills.format_skill_listing(skills.discover_skills())
+    if skill_listing:
+        parts.append("")
+        parts.append(skill_listing)
     return "\n".join(parts)
 
 
@@ -215,7 +224,7 @@ GENERAL_INSTRUCTIONS = (
 _register(AgentType(
     name="explore",
     description="Read-only code investigation agent: searches and reads code to answer questions such as \"where is X\" or \"how is Y implemented\", making no changes",
-    tool_names=["read_file", "run_command"],
+    tool_names=["read_file", "load_skill", "run_command"],
     instructions=EXPLORE_INSTRUCTIONS,
     source="built-in",
 ))

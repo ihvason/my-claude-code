@@ -17,6 +17,7 @@ import compact
 import mcp_servers
 import subagents
 import permissions
+import skills
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from agent.reminders import build_job_notifications
@@ -169,6 +170,13 @@ async def main():
     if custom_agents:
         names = ", ".join(a.name for a in custom_agents)
         console.print(f"[dim]Loaded {len(custom_agents)} custom agent(s): {names}[/]\n")
+
+    # Startup only discovers skill names and descriptions; full instructions are read once a
+    # task actually matches
+    available_skills = skills.discover_skills()
+    if available_skills:
+        names = ", ".join(skill.name for skill in available_skills)
+        console.print(f"[dim]Discovered {len(available_skills)} skill(s): {names}[/]\n")
 
     # Spinner while connecting; otherwise a cold start that fetches packages looks like a hang
     with console.status("Connecting MCP server..."):

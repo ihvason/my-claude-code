@@ -20,6 +20,7 @@ from .file import read_and_register, read_file, edit_file, write_file
 from .shell import job_kill, run_command
 from .monitor import monitor
 from .tasks import task_create, task_get, task_list, task_update
+from skills import load_skill
 
 # edit_file and write_file are marked sequential=True: multiple file edits in one
 # turn must run serially, otherwise they would write concurrently from the same
@@ -28,6 +29,7 @@ from .tasks import task_create, task_get, task_list, task_update
 # Mark task_update with sequential=True: concurrent updates in a single turn risk lost updates due to stale snapshots (store lacks locking).
 TOOLS = [
     read_file,
+    load_skill,
     Tool(edit_file, sequential=True),
     Tool(write_file, sequential=True),
     run_command,

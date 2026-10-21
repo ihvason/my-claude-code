@@ -12,6 +12,7 @@ from pydantic_ai.providers.deepseek import DeepSeekProvider
 import subagents
 
 from memory import store
+import skills
 from memory.instructions import MEMORY_INSTRUCTIONS
 from utils import find_agents_md
 
@@ -82,6 +83,13 @@ def project_context() -> str:
     parts.append("")
     parts.append("Agent types available to run_agent:")
     parts.append(subagents.format_agent_listing())
+
+    # The skill listing carries only name + description; the full SKILL.md is read through
+    # load_skill once the model decides it is relevant
+    skill_listing = skills.format_skill_listing(skills.discover_skills())
+    if skill_listing:
+        parts.append("")
+        parts.append(skill_listing)
 
     # Inject memory index: MEMORY.md is fully injected each turn so the model always knows what memory topics are available.
     # The benefit of using dynamic instructions is retrieving fresh values each turn—memories written in the current turn immediately appear in the next turn's index.
