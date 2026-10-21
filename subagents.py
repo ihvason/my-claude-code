@@ -51,8 +51,15 @@ async def _check_sub_permission(ctx, *, call, tool_def, args, handler):
     directly (the sub agent runs in the background), so the request is queued and bubbled
     up to the user, and the sub agent waits for the answer.
     """
-    if permissions.compute_decision(call.tool_name, args) == "allow":
+    decision = permissions.compute_decision(call.tool_name, args)
+    if decision == "allow":
         return await handler(args)
+    if decision == "deny":
+        # In plan mode a sub agent has no plan file, so writing is always denied
+        return (
+            f"Plan mode is on, so a sub agent cannot modify files; this {call.tool_name} call "
+            "did not run. Stay read-only and put the needed changes in your final report."
+        )
     # In auto mode the classifier is already the unattended approver, so sub agents use it
     # too; if the classifier itself errors, fall back to human approval below
     if permissions.state.mode == permissions.AUTO:
@@ -127,6 +134,26 @@ async def _sub_job_notifications(ctx, request_context):
         return request_context
     messages = list(request_context.messages)
     messages.append(ModelRequest(parts=[UserPromptPart(content=text)]))
+    return dataclasses.replace(request_context, messages=messages)
+
+
+# Sub agents dispatched in plan mode are read-only as well
+SUB_PLAN_REMINDER = (
+    "<system-reminder>\n"
+    "Plan mode is on. The user wants to see the approach before any work starts: you may not "
+    "modify any file and may not run any command that changes the system. Stay read-only and "
+    "put the needed changes in your final report.\n"
+    "</system-reminder>"
+)
+
+
+@sub_hooks.on.before_model_request
+async def _sub_plan_reminder(ctx, request_context):
+    # Inject only before the sub agent's first model request
+    messages = list(request_context.messages)
+    if permissions.state.mode != permissions.PLAN or len(messages) > 1:
+        return request_context
+    messages.append(ModelRequest(parts=[UserPromptPart(content=SUB_PLAN_REMINDER)]))
     return dataclasses.replace(request_context, messages=messages)
 
 
@@ -221,6 +248,13 @@ GENERAL_INSTRUCTIONS = (
     "When done, output a concise final report: what you did, which files you changed, and the key findings. The caller only sees this report, not your intermediate steps."
 )
 
+PLAN_INSTRUCTIONS = (
+    "You are a read-only software architecture agent. Given the request and the investigation results, read the code and design the implementation approach.\n"
+    "Never modify anything: do not create or change files. Read code with read_file, and use run_command only for simple read-only commands such as ls, grep and cat; do not run tests or scripts, and never run commands with side effects.\n"
+    "Understand the existing architecture and conventions first; the approach should follow established patterns and weigh the design trade-offs.\n"
+    "Finish with the approach: the implementation steps in order, the risks to watch, and finally the 3-5 files most critical to the implementation. The caller only sees this final report, not your intermediate steps, so the report must stand on its own."
+)
+
 _register(AgentType(
     name="explore",
     description="Read-only code investigation agent: searches and reads code to answer questions such as \"where is X\" or \"how is Y implemented\", making no changes",
@@ -234,6 +268,14 @@ _register(AgentType(
     description="General purpose agent that can read and write files and run commands; suited to multi-step subtasks such as writing tests or fixing an isolated bug",
     tool_names=list(_TOOL_FUNCS),
     instructions=GENERAL_INSTRUCTIONS,
+    source="built-in",
+))
+
+_register(AgentType(
+    name="plan",
+    description="Read-only design agent: given the request and investigation results, designs the implementation approach with steps, key files and risks, making no changes",
+    tool_names=["read_file", "run_command"],
+    instructions=PLAN_INSTRUCTIONS,
     source="built-in",
 ))
 

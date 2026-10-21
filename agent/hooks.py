@@ -17,6 +17,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 import classifier
 import permissions
 from ui.render import console, print_step
+import plan_mode
 
 from .reminders import build_job_notifications, build_reminder_text, build_task_reminder_text
 
@@ -147,6 +148,9 @@ def _build_job_reminder(ctx, messages) -> str | None:
     # model request
     return build_job_notifications(ctx.deps.job_registry)
 
+def _build_plan_reminder(ctx, messages) -> str | None:
+    return plan_mode.build_plan_reminder(messages, ctx.deps.plan_file)
+
 
 # Registered reminder builders executed in before_model_request: (sentinel, builder) pairs.
 # Sentinels are used solely for reverse-scan identification (e.g., task reminders).
@@ -154,7 +158,7 @@ _REMINDER_SENTINELS = {
     # Task reminder sentinel matches the static phrase guaranteed by the reminder builder
     "task": "The task tools haven't been used recently",
 }
-_REMINDER_BUILDERS = (_build_file_reminder, _build_task_reminder, _build_job_reminder)
+_REMINDER_BUILDERS = (_build_plan_reminder, _build_file_reminder, _build_task_reminder, _build_job_reminder)
 
 
 @hooks.on.before_model_request
@@ -233,10 +237,18 @@ async def _check_permission(ctx, *, call, tool_def, args, handler):
     - 'deny': returns refusal reason as tool output for self-correction.
     In auto mode, 'ask' delegates decisions to an LLM classifier rather than prompting immediately.
     """
-    decision = permissions.compute_decision(call.tool_name, args)
+    decision = permissions.compute_decision(call.tool_name, args, ctx.deps.plan_file)
     if decision == "allow":
         # Approved: proceed with actual execution via handler(args)
         return await handler(args)
+    if decision == "deny":
+        # Plan mode denies writes outside the plan file; hand the reason back so the model
+        # adapts instead of retrying
+        return (
+            f"{call.tool_name} is not permitted in {permissions.state.mode} mode. "
+            "While planning, the only file that may be written is the plan file; put the "
+            "plan there and keep everything else read-only."
+        )
 
     # decision == "ask" in AUTO mode: delegate decision-making to the classifier
     if permissions.state.mode == permissions.AUTO:

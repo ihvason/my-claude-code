@@ -2,15 +2,20 @@
 Permission control: Evaluates whether to allow, prompt, or deny a tool call before execution.
 """
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 from memory import store
+from ui.render import console
 
 
 # Permission modes
@@ -22,14 +27,22 @@ ACCEPT_EDITS = "acceptEdits"
 BYPASS = "bypass"
 # auto: Delegates pending calls to an LLM classifier; allows safe actions and blocks risky ones
 AUTO = "auto"
+# plan: explore and plan read-only; only the plan file may be written, and every other
+# non-read-only tool asks for approval each time
+PLAN = "plan"
 
-# Mode rotation order via Shift+Tab
-MODES = [DEFAULT, ACCEPT_EDITS, AUTO, BYPASS]
+# Order in which Shift+Tab cycles the permission modes; plan comes right after acceptEdits
+MODES = [DEFAULT, ACCEPT_EDITS, PLAN, AUTO, BYPASS]
 
 READONLY_TOOLS = {"read_file", "ask_user_question", "task_create", "task_list", "task_get", "task_update", "job_kill"}
 
 # File modification tools: Auto-allowed in acceptEdits mode
 EDIT_TOOLS = {"write_file", "edit_file"}
+
+# Allowed in plan mode besides read-only tools: the plan workflow itself relies on them
+# (dispatching read-only sub agents, loading a skill) and exit_plan_mode opens its own
+# approval picker
+PLAN_ALLOWED_TOOLS = READONLY_TOOLS | {"run_agent", "load_skill", "enter_plan_mode", "exit_plan_mode"}
 
 # Tool self-check registry: Evaluates arguments for fine-grained semantic risk control
 TOOL_SELF_CHECKS = {}
@@ -51,6 +64,8 @@ class PermissionState:
     - Allowlist is session-scoped: clears when switching sessions via /new or /resume.
     """
     mode: str = DEFAULT
+    # Mode to restore once the plan is approved
+    pre_plan_mode: str = DEFAULT
     # Tools marked "always allow" for the current session
     session_allowed: set = field(default_factory=set)
 
@@ -58,7 +73,7 @@ class PermissionState:
 state = PermissionState()
 
 
-def compute_decision(tool_name: str, args: dict) -> str:
+def compute_decision(tool_name: str, args: dict, plan_file: Path | None = None) -> str:
     """
     Evaluates permission rules and returns "allow" or "ask" for the given tool call.
     """
@@ -68,6 +83,19 @@ def compute_decision(tool_name: str, args: dict) -> str:
     # Tool self-check: Takes precedence over session allowlist
     check = TOOL_SELF_CHECKS.get(tool_name)
     verdict = check(args) if check else None
+
+    # Plan mode is decided on its own and bypasses the session allowlist: "don't ask again"
+    # must not permit changes during planning
+    if state.mode == PLAN:
+        # Only the plan file may be written; everything else is denied
+        if tool_name in EDIT_TOOLS:
+            if plan_file and _is_same_file(args.get("path", ""), plan_file):
+                return "allow"
+            return "deny"
+        # Read-only tools, the plan workflow's own tools, and calls the self-check proved safe
+        # (ls, grep and the like) are allowed; everything else asks every time
+        return "allow" if tool_name in PLAN_ALLOWED_TOOLS or verdict == "allow" else "ask"
+    
     if verdict:
         return verdict
     # Session allowlist check
@@ -89,12 +117,23 @@ def compute_decision(tool_name: str, args: dict) -> str:
     return "ask"
 
 
+def _is_same_file(path: str, target: Path) -> bool:
+    return bool(path) and Path(path).resolve() == target.resolve()
+
+
+def set_mode(mode: str) -> None:
+    # Remember the previous mode when entering plan mode, so approval can restore it
+    if mode == PLAN and state.mode != PLAN:
+        state.pre_plan_mode = state.mode
+    state.mode = mode
+
+
 def cycle_mode() -> str:
     """
-    Cycles mode through default -> acceptEdits -> auto -> bypass -> default.
+    Cycles mode through default -> acceptEdits -> plan -> auto -> bypass -> default.
     """
     index = MODES.index(state.mode)
-    state.mode = MODES[(index + 1) % len(MODES)]
+    set_mode(MODES[(index + 1) % len(MODES)])
     return state.mode
 
 
@@ -213,3 +252,21 @@ async def prompt_approval(tool_name: str, args: dict, requester: str = "") -> st
         question = f"{requester}Allow {_format_call(tool_name, args)}?"
         choice = await _ApprovalPicker(question, options).run()
     return choice
+
+
+async def prompt_plan_approval(plan: str, plan_file: Path) -> tuple[str, str]:
+    """
+    Show the plan and open the approval picker. Returns (choice, feedback), where choice is
+    "approve", "keep" to continue planning, or "deny" when cancelled with Esc.
+    """
+    options = [
+        ("approve", f"Approve and switch to {state.pre_plan_mode} to implement"),
+        ("keep", "Not approved; keep refining the plan"),
+    ]
+    feedback = ""
+    async with in_terminal():
+        console.print(Panel(Markdown(plan), title=str(plan_file), border_style="magenta"))
+        choice = await _ApprovalPicker("Approve this plan and start implementing?", options).run()
+        if choice == "keep":
+            feedback = await PromptSession().prompt_async("Tell the model what to change (press Enter to skip): ")
+    return choice, feedback.strip()

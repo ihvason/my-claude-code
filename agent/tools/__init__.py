@@ -9,18 +9,20 @@ External code only needs:
 """
 from pydantic_ai import Tool
 
+from skills import load_skill
+
 # Importing shell explicitly triggers its module-level
 # permissions.register_self_check side effect: the danger-pattern self-check for
 # run_command must be registered at import time, otherwise dangerous commands
 # would be auto-approved later in default mode
 from . import shell as _shell  # noqa: F401
-from .ask_user import ask_user_question
 from .agents import run_agent
+from .ask_user import ask_user_question
 from .file import read_and_register, read_file, edit_file, write_file
-from .shell import job_kill, run_command
 from .monitor import monitor
+from .plan import enter_plan_mode, exit_plan_mode
+from .shell import job_kill, run_command
 from .tasks import task_create, task_get, task_list, task_update
-from skills import load_skill
 
 # edit_file and write_file are marked sequential=True: multiple file edits in one
 # turn must run serially, otherwise they would write concurrently from the same
@@ -41,6 +43,8 @@ TOOLS = [
     task_get,
     Tool(task_update, sequential=True),
     ask_user_question,
+    enter_plan_mode,
+    exit_plan_mode,
 ]
 
 __all__ = ["TOOLS", "read_and_register"]

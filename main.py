@@ -15,6 +15,7 @@ import session
 import images
 import compact
 import mcp_servers
+import plan_mode
 import subagents
 import permissions
 import skills
@@ -101,6 +102,7 @@ async def run_agent_loop(user_input, state, attachments=None):
         tasks_store=state.tasks_store,
         file_history=state.file_history,
         job_registry=state.job_registry,
+        plan_file=plan_mode.plan_file_path(state.session_id),
     )
     async with agent.iter(
         user_input, message_history=state.history, deps=deps,
@@ -155,6 +157,7 @@ async def main():
     # Create the memory directory at startup: the system prompt promises it already
     # exists, so the model need not waste a turn confirming it.
     store.ensure_memory_dir()
+    plan_mode.ensure_plans_dir(session_id)
     tasks_store = TasksStore(session_id=session_id)
     state = SessionState(
         model_name=MODEL_NAME,
