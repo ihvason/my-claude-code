@@ -3,7 +3,7 @@ name = "my-claude-code"
 version = "0.1.0"
 description = "A minimal terminal coding agent"
 readme = "README.md"
-requires-python = "==3.12.13"
+requires-python = ">=3.12,<3.13"
 
 dependencies = [
     "pillow>=13.0.0",
@@ -13,5 +13,36 @@ dependencies = [
     "rich==15.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.17.1",
+]
+
 [tool.uv]
 package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".my-claude-code", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# E501: prose string literals cannot be wrapped by the formatter.
+# RUF001/RUF002/RUF003: the TUI intentionally renders unicode glyphs (❯ ✔ ✘ ⏺ ─ ●).
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "agent",
+    "core",
+    "state",
+    "security",
+    "media",
+    "integrations",
+    "memory",
+    "ui",
+]
+
+[tool.ruff.format]
+quote-style = "double"
