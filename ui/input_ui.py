@@ -331,19 +331,29 @@ class Repl:
         """
         Apply the completion under the cursor. Returns True when the key press was consumed
         by completion and must not submit the line.
+
+        An item the user highlighted with the arrow keys is always accepted, for both @
+        references and slash commands. With nothing highlighted, autocompletion only ever
+        offers a guess, so only a bare "/command" is auto-accepted; an @ reference falls
+        through and the line is submitted exactly as typed.
         """
         state = self._buffer.complete_state
         if not state or not state.completions:
             return False
-        # Autocompletion opens the menu without selecting an entry; Tab selects the first
-        # one, so Enter does the same instead of submitting the half-typed line
-        completion = state.current_completion or state.completions[0]
+        text = self._buffer.document.text_before_cursor
+        # Same condition as SlashCommandCompleter: the line is a bare command word
+        is_command = text.startswith("/") and " " not in text
+        selected = state.current_completion
+        if selected is None:
+            if not is_command:
+                return False
+            selected = state.completions[0]
         document = self._buffer.document
-        start = document.cursor_position + completion.start_position
-        if document.text[start:document.cursor_position] == completion.text:
+        start = document.cursor_position + selected.start_position
+        if document.text[start:document.cursor_position] == selected.text:
             # Applying it would change nothing, so this Enter means "submit"
             return False
-        self._buffer.apply_completion(completion)
+        self._buffer.apply_completion(selected)
         return True
 
     def _on_enter(self):
