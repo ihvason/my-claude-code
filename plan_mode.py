@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic_ai.messages import ModelResponse, UserPromptPart
 
-import permissions
+from security import permissions
 from core.paths import get_session_dir
 
 # After the last plan reminder, send the short version once every this many requests

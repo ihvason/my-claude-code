@@ -18,9 +18,9 @@ from rich.markup import escape
 from rich.padding import Padding
 
 import compact
-import images
-import mcp_servers
-import permissions
+from media import images
+from integrations import mcp as mcp_servers
+from security import permissions
 from state import sessions as session
 import subagents
 from agent import ReadFileState

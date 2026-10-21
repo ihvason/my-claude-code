@@ -16,7 +16,7 @@ from rich.padding import Padding
 from state import sessions as session
 from agent.core import model
 from agent.file_state import ReadFileState
-from mentions import build_mention_messages
+from media.mentions import build_mention_messages
 from core.console import console
 
 # The model's context window size

@@ -20,8 +20,8 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.usage import UsageLimits
 from pydantic_graph import End
 
-import classifier
-import permissions
+from security import classifier
+from security import permissions
 import skills
 from agent.deps import AgentDeps
 from agent.file_state import ReadFileState

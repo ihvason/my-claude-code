@@ -4,7 +4,7 @@ submits the written plan for user approval.
 """
 from pydantic_ai import RunContext
 
-import permissions
+from security import permissions
 
 from ..deps import AgentDeps
 

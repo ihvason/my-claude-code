@@ -4,7 +4,7 @@ conversation as events.
 """
 from pydantic_ai import RunContext
 
-import permissions
+from security import permissions
 
 from ..deps import AgentDeps
 from .shell import run_command_self_check

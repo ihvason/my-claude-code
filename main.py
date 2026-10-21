@@ -12,12 +12,12 @@ from pydantic_ai import Agent
 from pydantic_graph import End
 
 from state import sessions as session
-import images
+from media import images
 import compact
-import mcp_servers
+from integrations import mcp as mcp_servers
 import plan_mode
 import subagents
-import permissions
+from security import permissions
 import skills
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
@@ -34,7 +34,7 @@ from ui.commands import (
     print_welcome_banner,
 )
 from ui.input_ui import Repl
-from mentions import (
+from media.mentions import (
     build_mention_messages,
     extract_at_mentions,
     replace_image_mentions,

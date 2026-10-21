@@ -10,7 +10,7 @@ import time
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 
-import permissions
+from security import permissions
 
 from ..deps import AgentDeps
 

@@ -26,9 +26,9 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.markup import escape
 
-import permissions
-import images
-from mentions import list_candidate_files
+from security import permissions
+from media import images
+from media.mentions import list_candidate_files
 from core.console import console, print_system_text
 
 # Persistent input area: remains pinned to the bottom throughout the session.

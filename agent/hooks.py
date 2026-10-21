@@ -14,8 +14,8 @@ from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
-import classifier
-import permissions
+from security import classifier
+from security import permissions
 from core.console import console, print_step
 import plan_mode
 

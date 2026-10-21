@@ -17,7 +17,7 @@ from pydantic_ai.exceptions import ModelRetry
 
 from ..file_state import ReadFileState
 
-import images
+from media import images
 
 # Maximum lines read when no limit is given; anything beyond is truncated with a
 # hint to continue using offset

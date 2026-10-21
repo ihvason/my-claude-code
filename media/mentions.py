@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-import images
+from media import images
 from agent.file_state import ReadFileState
 from agent.tools import read_and_register
 
