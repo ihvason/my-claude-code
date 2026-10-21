@@ -11,7 +11,7 @@ import os
 from pydantic_ai import Agent
 from pydantic_graph import End
 
-import session
+from state import sessions as session
 import images
 import compact
 import mcp_servers
@@ -22,9 +22,9 @@ import skills
 from agent import agent, MODEL_NAME, api_call_log
 from agent.deps import AgentDeps
 from agent.reminders import build_job_notifications
-from tasks_store import TasksStore
-from file_history import FileHistory
-from background_jobs import JobRegistry
+from state.tasks import TasksStore
+from state.file_history import FileHistory
+from state.jobs import JobRegistry
 from memory import background, recall, store
 from ui.commands import (
     COMMANDS,

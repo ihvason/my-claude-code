@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Literal
 import time
 
-from utils import get_session_dir
+from core.paths import get_session_dir
 
 # Event rate limits for monitors: lines beyond the window budget, or arriving when the queue
 # is already full, are only counted; once the cumulative drop count hits its cap the monitor

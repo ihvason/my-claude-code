@@ -5,13 +5,13 @@ TasksStore (for task tools) into a single container for unified injection via Ru
 from dataclasses import dataclass
 from pathlib import Path
 
-from tasks_store import TasksStore
+from state.tasks import TasksStore
 
 from .file_state import ReadFileState
 
-from file_history import FileHistory
+from state.file_history import FileHistory
 
-from background_jobs import Job, JobRegistry
+from state.jobs import Job, JobRegistry
 
 
 @dataclass

@@ -30,9 +30,9 @@ from agent.model import model
 from agent.reminders import build_job_reminder_text
 from agent.tools.file import edit_file, read_file, write_file
 from agent.tools.shell import run_command
-from background_jobs import Job, JobRegistry
+from state.jobs import Job, JobRegistry
 from memory.store import _parse_frontmatter
-from utils import find_agents_md, get_data_dir
+from core.paths import find_agents_md, get_data_dir
 
 # Maximum number of model requests per sub agent run, so a runaway loop cannot spin forever
 MAX_SUBAGENT_REQUESTS = 40

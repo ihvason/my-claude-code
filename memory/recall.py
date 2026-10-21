@@ -9,8 +9,8 @@ import os
 from openai import AsyncOpenAI
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-import session
-from ui.render import print_step
+from state import sessions as session
+from core.console import print_step
 
 from . import store
 

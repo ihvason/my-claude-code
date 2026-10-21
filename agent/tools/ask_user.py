@@ -21,7 +21,7 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.styles import Style
 from pydantic_ai.exceptions import ModelRetry
 
-from ui.render import console
+from core.console import console
 
 # Color scheme: purple background for the focused chip, green once Submit is
 # ready, blue for the pointer and the current label, grey for descriptions.

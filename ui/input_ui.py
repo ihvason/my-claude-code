@@ -29,7 +29,7 @@ from rich.markup import escape
 import permissions
 import images
 from mentions import list_candidate_files
-from .render import console, print_system_text
+from core.console import console, print_system_text
 
 # Persistent input area: remains pinned to the bottom throughout the session.
 # Agent output streams above via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.

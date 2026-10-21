@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterator, Literal
 
-from utils import get_session_dir
+from core.paths import get_session_dir
 
 
 # Only these three statuses are persisted to disk; 'deleted' is a pseudo-status signal during update that triggers deletion instead of serialization.

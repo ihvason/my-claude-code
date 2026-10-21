@@ -14,7 +14,7 @@ import subagents
 from memory import store
 import skills
 from memory.instructions import MEMORY_INSTRUCTIONS
-from utils import find_agents_md
+from core.paths import find_agents_md
 
 from .deps import AgentDeps
 from .hooks import hooks

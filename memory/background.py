@@ -13,12 +13,12 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.usage import UsageLimits
 
-import session
+from state import sessions as session
 from agent.core import INSTRUCTIONS, model
 from agent.deps import AgentDeps
 from agent.file_state import ReadFileState
 from agent.tools.file import edit_file, read_file, write_file
-from ui.render import print_step
+from core.console import print_step
 
 from . import store
 

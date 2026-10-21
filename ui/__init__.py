@@ -1,9 +1,8 @@
 """
-Terminal UI layer: rendering primitives (render), slash commands (commands), and
-the input area (input_ui, only present in some versions).
+Terminal UI layer: slash commands (commands) and the input area (input_ui).
 
-Import from the submodules directly (ui.render / ui.commands / ...). This
-__init__ deliberately re-exports nothing: render is the lowest-level primitive
-that even non-UI modules (such as permissions and agent.hooks) depend on, so
-re-exporting commands here could form a circular import through them.
+Import from the submodules directly (ui.commands / ui.input_ui). This __init__
+deliberately re-exports nothing: the shared rendering primitives now live in
+core.console, and re-exporting commands here would pull the whole agent stack
+into any importer.
 """

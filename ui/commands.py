@@ -21,14 +21,14 @@ import compact
 import images
 import mcp_servers
 import permissions
-import session
+from state import sessions as session
 import subagents
 from agent import ReadFileState
-from file_history import FileHistory
-from background_jobs import JobRegistry
+from state.file_history import FileHistory
+from state.jobs import JobRegistry
 from memory import background, store
-from tasks_store import TasksStore
-from .render import console, print_step, print_welcome_banner
+from state.tasks import TasksStore
+from core.console import console, print_step, print_welcome_banner
 
 
 class LeftAlignedHeading(Heading):

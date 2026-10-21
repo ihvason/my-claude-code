@@ -1,9 +1,8 @@
 """
-Shared path utilities.
+Shared path utilities and project-root discovery.
 
-Dependency-free and kept at the project root so that both the top-level modules
-(session.py, tasks_store.py) and the agent/ package can import it without
-creating an import cycle.
+This module is a leaf: it imports only the standard library, so every other layer
+(state/, security/, agent/, ui/) can depend on it without creating a cycle.
 """
 import re
 from functools import cache

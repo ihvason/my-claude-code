@@ -15,7 +15,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from memory import store
-from ui.render import console
+from core.console import console
 
 
 # Permission modes

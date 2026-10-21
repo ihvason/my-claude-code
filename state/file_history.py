@@ -25,7 +25,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from utils import get_session_dir
+from core.paths import get_session_dir
 
 
 @dataclass

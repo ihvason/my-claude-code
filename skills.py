@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic_ai.exceptions import ModelRetry
 
-from utils import get_data_dir
+from core.paths import get_data_dir
 
 
 USER_SKILLS_DIR = Path.home() / ".my-claude-code" / "skills"

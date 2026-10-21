@@ -5,9 +5,9 @@ from html import escape as escape_xml
 
 from rich.markup import escape
 
-from background_jobs import JobRegistry
-from tasks_store import TasksStore
-from ui.render import console
+from state.jobs import JobRegistry
+from state.tasks import TasksStore
+from core.console import console
 
 from .file_state import ReadFileState
 

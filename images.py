@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 from pydantic_ai import BinaryContent
 
-from utils import get_session_dir
+from core.paths import get_session_dir
 
 # Images are recognized by extension; the content is validated when the file is read
 IMAGE_EXTENSIONS = {

@@ -24,7 +24,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_core import to_jsonable_python
 
-from utils import get_session_dir, get_sessions_dir
+from core.paths import get_session_dir, get_sessions_dir
 
 # Canonical file names inside a session bundle
 TRANSCRIPT_NAME = "transcript.jsonl"

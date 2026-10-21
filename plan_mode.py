@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelResponse, UserPromptPart
 
 import permissions
-from utils import get_session_dir
+from core.paths import get_session_dir
 
 # After the last plan reminder, send the short version once every this many requests
 PLAN_REMINDER_TURNS_BETWEEN = 5

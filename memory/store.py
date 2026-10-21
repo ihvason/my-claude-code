@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from utils import get_project_dir
+from core.paths import get_project_dir
 
 # The MEMORY.md index is injected into context in full every turn, so it must be
 # capped: truncate once either limit is exceeded

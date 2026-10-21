@@ -16,7 +16,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 
 import classifier
 import permissions
-from ui.render import console, print_step
+from core.console import console, print_step
 import plan_mode
 
 from .reminders import build_job_notifications, build_reminder_text, build_task_reminder_text
