@@ -17,6 +17,8 @@ from pydantic_ai.exceptions import ModelRetry
 
 from ..file_state import ReadFileState
 
+import images
+
 # Maximum lines read when no limit is given; anything beyond is truncated with a
 # hint to continue using offset
 DEFAULT_MAX_LINES = 2000
@@ -85,6 +87,14 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
         offset: 1-based line to start from (default 1 = start of file)
         limit: number of lines to read; defaults to at most DEFAULT_MAX_LINES
     """
+    # Images take a separate path: no line splitting, no numbering, no registration; the
+    # bytes go straight back to the model
+    if images.is_image(path):
+        try:
+            return images.load_image(path)
+        except images.ImageError as e:
+            raise ModelRetry(str(e))
+        
     # 1. Deduplicate: recorded in readFileState, came from read_file (offset not
     # None), same range, same mtime -> skip
     state = ctx.deps.read_file_state

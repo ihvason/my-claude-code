@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import questionary
 from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.formatted_text import FormattedText
+from pydantic_ai import BinaryContent
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -17,6 +18,7 @@ from rich.markup import escape
 from rich.padding import Padding
 
 import compact
+import images
 import mcp_servers
 import permissions
 import session
@@ -196,18 +198,18 @@ def _preview_diff(old: str, new: str) -> str:
 
 def _print_file_op(part) -> bool:
     """
-    Rich display for file tools: a red/green diff for edit, a numbered write preview
-    for write, and numbered read results for read. Returns True when handled.
+    Rich display for file tools: red/green diff for edit, numbered write preview, numbered
+    read result. Returns True when the part was handled.
     """
-    # Special-cased by tool name rather than a registry like permissions: the display
-    # logic depends on rich, and having the tool layer register renderers would make
-    # the agent layer depend on the UI layer, which is not worth it
+    # Tools are special-cased by name instead of going through a registry like permissions:
+    # the display depends on rich, and letting the tool layer register renderers would make
+    # the agent layer depend on the UI layer
     kind = part.part_kind
     if kind == "tool-call" and part.tool_name in ("edit_file", "write_file"):
         args = part.args_as_dict()
         path = escape(str(args.get("path", "")))
-        # The label line for edit / write matches the "tool_name(path)" content-line
-        # format, so print them uniformly; only the preview below differs
+        # The label line and the tool_name(path) line have the same shape for both tools;
+        # only the preview below differs
         console.print("[yellow]⏺ tool_call[/]")
         console.print(Padding(f"[yellow dim]{part.tool_name}({path})[/]", (0, 0, 0, 2)))
         if part.tool_name == "edit_file":
@@ -218,9 +220,13 @@ def _print_file_op(part) -> bool:
                 console.print(block)
         return True
     if kind == "tool-return" and part.tool_name == "read_file":
-        # read_file already returns numbered content, so truncate the preview by line
+        # read_file returns numbered content; preview it line by line, truncated
         console.print("[magenta]✔ tool_return[/]")
         console.print(Padding("[magenta dim]read_file[/]", (0, 0, 0, 2)))
+        # Images come back as binary; show a one-line summary instead of dumping bytes
+        if isinstance(part.content, BinaryContent):
+            console.print(f"  [magenta dim]{escape(images.describe(part.content))}[/]")
+            return True
         lines = str(part.content).splitlines()
         for ln in lines[:_PREVIEW_MAX_LINES]:
             console.print(f"  [dim]{escape(ln)}[/]")

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = "==3.12.13"
 
 dependencies = [
+    "pillow>=13.0.0",
     "prompt-toolkit==3.0.53",
     "pydantic-ai-slim[mcp,openai]==2.54.0",
     "questionary>=2.1.1",

@@ -12,6 +12,7 @@ from pydantic_ai import Agent
 from pydantic_graph import End
 
 import session
+import images
 import compact
 import mcp_servers
 import subagents
@@ -31,7 +32,11 @@ from ui.commands import (
     print_welcome_banner,
 )
 from ui.input_ui import Repl
-from mentions import build_mention_messages, extract_at_mentions
+from mentions import (
+    build_mention_messages,
+    extract_at_mentions,
+    replace_image_mentions,
+)
 
 
 os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
@@ -78,11 +83,15 @@ def apply_result(state, result):
     session.append_messages(state.session_id, result.new_messages())
 
 
-async def run_agent_loop(user_input, state):
+async def run_agent_loop(user_input, state, attachments=None):
     """
     Expand agent.run_sync() to step through the agent loop node by node with real-time logging.
     """
     api_call_log.clear()
+
+    # Assemble ordered text and image content blocks using the [Image #N] positions
+    if attachments:
+        user_input = images.build_user_content(user_input, attachments)
 
     # deps bundles this session's readFileState, tasksStore, file checkpoints and job
     # registry into AgentDeps for the tool layer, where tools reach them via ctx.deps.*
@@ -115,17 +124,20 @@ async def run_agent_loop(user_input, state):
     return run.result
 
 
-def inject_at_mentions(user_input, state):
+def inject_at_mentions(user_input, state, first_image_index):
     """
     Parses @path references in user input and injects mock read_file tool invocations
     into the conversation history before running the agent.
     """
     paths = extract_at_mentions(user_input)
     if not paths:
-        return
-    mention_messages = build_mention_messages(paths, state.read_file_state)
+        return user_input, []
+    mention_messages, attachments, image_paths = build_mention_messages(
+        paths, state.read_file_state
+    )
+    user_input = replace_image_mentions(user_input, image_paths, first_image_index)
     if not mention_messages:
-        return
+        return user_input, attachments
     # Inject into history so the model perceives the files as already read
     state.history += mention_messages
     # Persist injected files to allow restoration via /resume
@@ -134,6 +146,7 @@ def inject_at_mentions(user_input, state):
     for msg in mention_messages:
         for part in msg.parts:
             print_part(part)
+    return user_input, attachments
 
 
 async def main():
@@ -166,7 +179,7 @@ async def main():
     # Persistent input bar: remains visible at the bottom throughout the session
     repl = Repl(state)
 
-    async def on_submit(user_input):
+    async def on_submit(user_input, attachments):
         # Triggered on each Enter submission
         # Process slash commands first
         action = await handle_command(user_input, state)
@@ -199,8 +212,11 @@ async def main():
             tasks=state.tasks_store.snapshot() if state.tasks_store else None,
         )
 
-        # Parse @ mentions and inject referenced files as mock read_file calls into history
-        inject_at_mentions(user_input, state)
+        # Text files go into the history; image @paths become image placeholders in place
+        agent_input, mentioned_images = inject_at_mentions(
+            user_input, state, len(attachments) + 1
+        )
+        attachments = attachments + mentioned_images
 
         # Core agent loop: show 'Working...' on start, cleared on completion or interrupt;
         # ESC / Ctrl+C interrupts execution midway
@@ -209,13 +225,13 @@ async def main():
         # Recall relevant memories into the history so the model builds on what it
         # has learned before handling this input
         await recall.inject_memories(user_input, state)
-        result = await run_agent_loop(user_input, state)
+        result = await run_agent_loop(agent_input, state, attachments)
         # After the turn, extract memories in the background and check whether
         # periodic consolidation is due
         background.schedule(state, result.new_messages())
 
-    async def on_system(text):
-        # System-triggered turn (background job completion notice): skip checkpointing,
+    async def on_system(text, attachments=None):
+        # System-triggered turn (background job completion notice): skip checkpoints,
         # @ parsing and memory recall, and run the agent directly
         await compact.auto_compact_if_needed(state)
         repl.start_working()

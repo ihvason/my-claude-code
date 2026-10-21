@@ -6,6 +6,7 @@ patch_stdout. Supports real-time execution cancellation (Esc / Ctrl+C), command
 history, dynamic spinners, and cycling permission modes via Shift+Tab.
 """
 import asyncio
+import platform
 import re
 import time
 from html import escape as html_escape
@@ -26,6 +27,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.markup import escape
 
 import permissions
+import images
 from mentions import list_candidate_files
 from .render import console, print_system_text
 
@@ -41,6 +43,11 @@ _TASK_ROW_TEMPLATES = {
     "in_progress": "  <ansiyellow>▶</ansiyellow> <b>{s}</b>",
     "pending": "  <ansibrightblack>☐ {s}</ansibrightblack>",
 }
+
+# Placeholder inserted into the input line for a pasted image; backspace deletes it whole
+_IMAGE_PLACEHOLDER = re.compile(r"\[Image #(\d+)\]")
+# Same placeholder anchored at the end, to tell whether the cursor sits right after one
+_IMAGE_PLACEHOLDER_AT_END = re.compile(r"\[Image #(\d+)\]$")
 
 
 class AtFileCompleter(Completer):
@@ -75,6 +82,10 @@ class Repl:
         self.working = False
         self._work_start = 0.0
         self._frame = 0
+        # Images pasted but not sent yet; they leave with the next Enter
+        self._pending_images = []
+        # Guards against several clipboard reads running at once
+        self._pasting = False
         # Configure input buffer with AtFileCompleter; complete_while_typing enables inline popups without Tab
         self._buffer = Buffer(
             multiline=False,
@@ -207,27 +218,95 @@ class Repl:
             # immediately with a job id
             self.state.job_registry.move_to_background()
 
+        # Windows pastes images with Alt+V so Ctrl+V keeps pasting text
+        image_paste_keys = ("escape", "v") if platform.system() == "Windows" else ("c-v",)
+
+        @kb.add(*image_paste_keys)
+        def _(event):
+            # Clipboard tools are blocking subprocesses; run the paste off the event loop
+            # so the REPL does not freeze for seconds
+            self.app.create_background_task(self._paste_image())
+
+        @kb.add("backspace")
+        def _(event):
+            # When the cursor sits right after a placeholder, delete it whole and drop the
+            # image it refers to
+            match = _IMAGE_PLACEHOLDER_AT_END.search(self._buffer.document.text_before_cursor)
+            if match is None:
+                self._buffer.delete_before_cursor(1)
+                return
+            self._buffer.delete_before_cursor(len(match.group()))
+            index = int(match.group(1)) - 1
+            if 0 <= index < len(self._pending_images):
+                self._pending_images.pop(index)
+            self._renumber_placeholders()
+
         return kb
 
+    async def _paste_image(self):
+        """
+        Read the clipboard image off the event loop and add it as a pending attachment.
+        """
+        if self._pasting:
+            return
+        self._pasting = True
+        try:
+            image = await images.read_clipboard_image_async(self.state.session_id)
+        except images.ImageError as e:
+            console.print(f"[yellow]{escape(str(e))}[/]\n")
+            return
+        except Exception as e:
+            console.print(f"[yellow]Clipboard image failed: {type(e).__name__}: {e}[/]\n")
+            return
+        finally:
+            self._pasting = False
+        if image is None:
+            return
+        self._pending_images.append(image)
+        self._buffer.insert_text(f"[Image #{len(self._pending_images)}]")
+        self.app.invalidate()
+
+    def _renumber_placeholders(self):
+        # After deleting an image in the middle, renumber the remaining placeholders so the
+        # numbers keep matching the indices in _pending_images
+        seq = iter(range(1, len(self._pending_images) + 1))
+        cursor = self._buffer.cursor_position
+        self._buffer.text = _IMAGE_PLACEHOLDER.sub(
+            lambda _: f"[Image #{next(seq)}]", self._buffer.text
+        )
+        self._buffer.cursor_position = min(cursor, len(self._buffer.text))
+
+    def _clear_input(self):
+        # Clearing the input line also drops pending images; otherwise the placeholder is
+        # gone but the image would still be sent with the next message
+        self._buffer.reset()
+        self._pending_images.clear()
+
     def _on_enter(self):
-        # Accept highlighted completion if menu is open instead of submitting
+        # With the completion menu open and an item highlighted, Enter accepts the
+        # completion instead of submitting
         if self._buffer.complete_state and self._buffer.complete_state.current_completion:
             self._buffer.apply_completion(self._buffer.complete_state.current_completion)
             return
-        # Block submissions while a request is in flight (prompt remains visible)
+        # No new submission while a request is in flight (the input line stays visible,
+        # Enter just does not start another turn)
         if self._task is not None:
             return
         text = self._buffer.text.strip()
         if not text:
-            self._buffer.reset()
+            self._clear_input()
             return
-        # Record into history and clear input prompt
+        # Record it in the input history and clear the line
         self._buffer.history.append_string(text)
         self._buffer.reset()
-        # Echo submitted text to scrollable output area to preserve history
+        # Echo the line to the scrollback so it is not lost: the input line is persistent
         self._echo_input(text)
-        # Dispatch to a background task so Enter returns immediately, allowing continuous UI render and cancellation
-        self._task = self.app.create_background_task(self._process(text))
+        # Hand the pending images to this turn and reset for the next one
+        attachments = self._pending_images
+        self._pending_images = []
+        # Dispatch to a background task so Enter returns immediately and the input line
+        # keeps rendering and stays interruptible
+        self._task = self.app.create_background_task(self._process(text, attachments=attachments))
 
     def _echo_input(self, text):
         # Echo submitted input framed by horizontal rules to mirror the prompt styling
@@ -237,11 +316,12 @@ class Repl:
         console.print(f"[bright_black]{rule}[/]")
         console.print()
 
-    async def _process(self, text, handler=None):
-        # Background task: delegates to the given turn handler (on_submit by default),
-        # handling cancellation and runtime exceptions
+    async def _process(self, text, handler=None, attachments=None):
+        # Background task: delegate to the matching handler (on_submit by default), catching
+        # interruption and runtime errors in one place
+        handler = handler or self._on_submit
         try:
-            await (handler or self._on_submit)(text)
+            await handler(text, attachments or [])
         except asyncio.CancelledError:
             console.print("\n[bold yellow]Interrupted[/]\n")
         except Exception as e:
@@ -249,8 +329,13 @@ class Repl:
         finally:
             self._task = None
             self.working = False
+            # After /rewind rolls the conversation back, put the original input back into
+            # the buffer so the user can edit and resend it
+            if self.state.pending_input:
+                self.prefill(self.state.pending_input)
+                self.state.pending_input = ""
             self.app.invalidate()
-
+            
     def start_working(self):
         # Set working state to display spinner; cleared in _process.finally on completion or cancellation
         self.working = True
@@ -258,8 +343,10 @@ class Repl:
         self.app.invalidate()
 
     def prefill(self, text: str) -> None:
-        # Put text back into the input buffer with the cursor at the end, ready to edit
-        # and resend; used after /rewind rolls the conversation back
+        # Put text back into the input buffer with the cursor at the end, ready to edit and
+        # resend; used after /rewind rolls the conversation back. Image placeholders are
+        # stripped because the attachments themselves cannot be restored.
+        text = re.sub(r" {2,}", " ", _IMAGE_PLACEHOLDER.sub("", text)).strip()
         self._buffer.text = text
         self._buffer.cursor_position = len(text)
         self.app.invalidate()

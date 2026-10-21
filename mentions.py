@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+import images
 from agent.file_state import ReadFileState
 from agent.tools import read_and_register
 
@@ -38,39 +39,74 @@ def extract_at_mentions(text: str) -> list[str]:
     return seen
 
 
-def build_mention_messages(paths: list[str], state: ReadFileState) -> list:
+def build_mention_messages(
+    paths: list[str], state: ReadFileState
+) -> tuple[list, list, list[str]]:
     """
-    Reads each mentioned file and constructs mock read_file tool_call and tool_return pairs
-    to append to the message history.
-    `read_and_register` caches the file in ReadFileState identically to a genuine read_file call,
-    allowing subsequent edit_file invocations to pass validation.
+    Read every @-mentioned path; text files become a synthetic read_file call/return pair.
+    read_and_register records them in readFileState exactly like a real read_file call, so a
+    later edit_file is not rejected.
+
+    Returns the history messages, the image attachments, and the original @ paths of the
+    images that were turned into attachments.
     """
     messages = []
+    attachments = []
+    image_paths = []
     for path in paths:
         abs_path = os.path.abspath(os.path.expanduser(path))
-        # Skip non-existent paths and directories
+        # Missing paths and directories are skipped
         if not os.path.isfile(abs_path):
             continue
+
+        # Images stay out of the history: they are collected as attachments and sent with
+        # this turn's input instead
+        if images.is_image(abs_path):
+            try:
+                attachments.append(images.load_image(abs_path))
+                image_paths.append(path)
+            except (OSError, images.ImageError):
+                continue
+            continue
+
         try:
             numbered = read_and_register(state, abs_path)
         except (OSError, UnicodeDecodeError):
             continue
 
-        # tool_call and tool_return must share an identical call_id for pairing
+        # tool_call and tool_return must share one id, otherwise the model does not see them
+        # as a single complete call
         call_id = "mention_" + uuid.uuid4().hex[:8]
-        # Assistant message simulating a model-initiated read_file call
+        # An assistant message pretending the model issued the read_file call itself
         messages.append(
             ModelResponse(
                 parts=[ToolCallPart(tool_name="read_file", args={"path": abs_path}, tool_call_id=call_id)]
             )
         )
-        # Tool return message delivering line-numbered content matching genuine read_file output
+        # A tool return holding the numbered file body, identical to a real read_file result
         messages.append(
             ModelRequest(
                 parts=[ToolReturnPart(tool_name="read_file", content=numbered, tool_call_id=call_id)]
             )
         )
-    return messages
+    return messages, attachments, image_paths
+
+
+def replace_image_mentions(text: str, image_paths: list[str], first_index: int) -> str:
+    """
+    Replace each image @path in place with its internal image placeholder.
+    """
+    indexes = {path: first_index + offset for offset, path in enumerate(image_paths)}
+
+    def replace(match):
+        path = match.group(1)
+        index = indexes.get(path)
+        if index is None:
+            return match.group(0)
+        prefix = match.group(0).removesuffix(f"@{path}")
+        return f"{prefix}[Image #{index}]"
+
+    return AT_MENTION_RE.sub(replace, text)
 
 
 # Common noise directories to skip during traversal (dependencies, caches, build artifacts)
