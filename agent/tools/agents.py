@@ -5,8 +5,7 @@ job in the same registry as background commands.
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 
-import subagents
-
+from .. import subagents
 from ..deps import AgentDeps
 from .shell import _background_notice
 

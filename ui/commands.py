@@ -17,13 +17,11 @@ from rich.markdown import Heading, Markdown
 from rich.markup import escape
 from rich.padding import Padding
 
-import compact
 from media import images
 from integrations import mcp as mcp_servers
 from security import permissions
 from state import sessions as session
-import subagents
-from agent import ReadFileState
+from agent import ReadFileState, compact, subagents
 from state.file_history import FileHistory
 from state.jobs import JobRegistry
 from memory import background, store

@@ -9,7 +9,7 @@ External code only needs:
 """
 from pydantic_ai import Tool
 
-from skills import load_skill
+from ..skills import load_skill
 
 # Importing shell explicitly triggers its module-level
 # permissions.register_self_check side effect: the danger-pattern self-check for

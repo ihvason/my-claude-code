@@ -20,19 +20,19 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.usage import UsageLimits
 from pydantic_graph import End
 
-from security import classifier
-from security import permissions
-import skills
-from agent.deps import AgentDeps
-from agent.file_state import ReadFileState
-from agent.hooks import _handle_tool_error, _retry_on_error
-from agent.model import model
-from agent.reminders import build_job_reminder_text
-from agent.tools.file import edit_file, read_file, write_file
-from agent.tools.shell import run_command
-from state.jobs import Job, JobRegistry
-from memory.store import _parse_frontmatter
 from core.paths import find_agents_md, get_data_dir
+from memory.store import _parse_frontmatter
+from security import classifier, permissions
+from state.jobs import Job, JobRegistry
+
+from . import skills
+from .deps import AgentDeps
+from .file_state import ReadFileState
+from .hooks import _handle_tool_error, _retry_on_error
+from .model import model
+from .reminders import build_job_reminder_text
+from .tools.file import edit_file, read_file, write_file
+from .tools.shell import run_command
 
 # Maximum number of model requests per sub agent run, so a runaway loop cannot spin forever
 MAX_SUBAGENT_REQUESTS = 40

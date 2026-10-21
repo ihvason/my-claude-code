@@ -14,11 +14,10 @@ from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
-from security import classifier
-from security import permissions
 from core.console import console, print_step
-import plan_mode
+from security import classifier, permissions
 
+from . import plan_mode
 from .reminders import build_job_notifications, build_reminder_text, build_task_reminder_text
 
 

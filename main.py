@@ -13,13 +13,10 @@ from pydantic_graph import End
 
 from state import sessions as session
 from media import images
-import compact
 from integrations import mcp as mcp_servers
-import plan_mode
-import subagents
 from security import permissions
-import skills
-from agent import agent, MODEL_NAME, api_call_log
+from agent import MODEL_NAME, agent, api_call_log
+from agent import compact, plan_mode, skills, subagents
 from agent.deps import AgentDeps
 from agent.reminders import build_job_notifications
 from state.tasks import TasksStore

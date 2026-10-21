@@ -13,11 +13,12 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from rich.markdown import Markdown
 from rich.padding import Padding
 
-from state import sessions as session
-from agent.core import model
-from agent.file_state import ReadFileState
-from media.mentions import build_mention_messages
 from core.console import console
+from media.mentions import build_mention_messages
+from state import sessions as session
+
+from .file_state import ReadFileState
+from .model import model
 
 # The model's context window size
 CONTEXT_WINDOW = 131_072
