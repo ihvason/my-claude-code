@@ -121,7 +121,13 @@ def list_candidate_files() -> list[str]:
     """
     try:
         result = subprocess.run(
-            ["git", "ls-files"], capture_output=True, text=True, timeout=2
+            ["git", "ls-files"],
+            capture_output=True,
+            text=True,
+            # Git emits raw bytes; surrogateescape keeps non-UTF-8 filenames from raising
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=2,
         )
         tracked = result.stdout.splitlines() if result.returncode == 0 else []
         # Use tracked files if available; fall back if empty (non-git repo or no staged files)

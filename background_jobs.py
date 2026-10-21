@@ -341,5 +341,6 @@ def _kill_process_tree(pid: int) -> None:
     else:
         try:
             os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
+            # The process already exited, or it belongs to another user
             pass

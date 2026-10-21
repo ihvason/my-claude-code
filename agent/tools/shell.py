@@ -56,7 +56,7 @@ async def run_command(
     if job.background:
         return _background_notice(job, f"The user moved this command to the background; it continues as job {job.id}")
 
-    output = job.log_path.read_text(errors="replace")
+    output = job.log_path.read_text(encoding="utf-8", errors="replace")
     if job.returncode != 0:
         output += f"\n[error] exit code {job.returncode}"
     return output or "(no output)"
