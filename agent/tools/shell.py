@@ -2,6 +2,7 @@
 shell tools: run_command and job_kill. The run_command self-check requires approval for
 dangerous commands and auto-approves simple read-only ones.
 """
+
 import asyncio
 import re
 import shlex
@@ -54,7 +55,9 @@ async def run_command(
         raise
 
     if job.background:
-        return _background_notice(job, f"The user moved this command to the background; it continues as job {job.id}")
+        return _background_notice(
+            job, f"The user moved this command to the background; it continues as job {job.id}"
+        )
 
     output = job.log_path.read_text(encoding="utf-8", errors="replace")
     if job.returncode != 0:

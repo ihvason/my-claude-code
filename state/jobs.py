@@ -2,6 +2,7 @@
 Background task layer: runs shell commands as background jobs, streams their output
 to log files, and tracks completion state for notification.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -10,10 +11,12 @@ import random
 import signal
 import string
 import subprocess
+import time
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
-import time
+from typing import Literal
 
 from core.paths import get_session_dir
 
@@ -71,7 +74,6 @@ class Job:
     window_start: float = 0.0
     window_count: int = 0
 
-
     def summary(self) -> str:
         """
         One-line description of how this job ended, used in notifications.
@@ -81,7 +83,6 @@ class Job:
             detail += f" (exit code {self.returncode})"
         noun = {"agent": "sub agent", "monitor": "monitor"}.get(self.kind, "shell")
         return f"{noun} {self.description!r} {detail}"
-
 
     def push_event(self, line: str) -> None:
         """
@@ -93,7 +94,10 @@ class Job:
             self.window_start = now
             self.window_count = 0
         self.window_count += 1
-        if self.window_count > MAX_EVENTS_PER_WINDOW or len(self.pending_events) >= MAX_PENDING_EVENTS:
+        if (
+            self.window_count > MAX_EVENTS_PER_WINDOW
+            or len(self.pending_events) >= MAX_PENDING_EVENTS
+        ):
             self.dropped_events += 1
             self.dropped_total += 1
             return
@@ -123,10 +127,12 @@ class JobRegistry:
         return self._jobs_dir
 
     async def spawn_shell(self, command: str, background: bool = True) -> Job:
+        """Start a shell command as a job and return it."""
         job_id = _new_job_id("b")
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
         log_path = self._jobs_dir / f"{job_id}.log"
-        log_file = open(log_path, "wb")
+        # The handle is handed to the child process and closed by the watcher when it exits
+        log_file = open(log_path, "wb")  # noqa: SIM115
         proc = await asyncio.create_subprocess_shell(
             command, stdout=log_file, stderr=subprocess.STDOUT, **_process_group_kwargs()
         )
@@ -197,8 +203,11 @@ class JobRegistry:
         # Key difference from spawn_shell: output is read line by line through a PIPE and
         # turned into events
         proc = await asyncio.create_subprocess_shell(
-            command, stdout=asyncio.subprocess.PIPE, stderr=subprocess.STDOUT,
-            limit=1024 * 1024, **_process_group_kwargs()
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            limit=1024 * 1024,
+            **_process_group_kwargs(),
         )
         pid = proc.pid
         job = Job(
@@ -217,9 +226,14 @@ class JobRegistry:
     async def _pump_monitor(
         self, job: Job, proc: asyncio.subprocess.Process, timeout: float | None
     ) -> None:
-        timer = asyncio.create_task(self._monitor_timeout(job, timeout)) if timeout is not None else None
-        # Line buffered, so the model can read_file and see output as soon as it is produced
-        log_file = open(job.log_path, "w", encoding="utf-8", buffering=1)
+        timer = (
+            asyncio.create_task(self._monitor_timeout(job, timeout))
+            if timeout is not None
+            else None
+        )
+        # Line buffered, so the model can read_file and see output as soon as it is produced.
+        # The handle stays open for the pump's lifetime and is closed in the finally block
+        log_file = open(job.log_path, "w", encoding="utf-8", buffering=1)  # noqa: SIM115
         try:
             # Each line is both written to the log and queued as an event for the model
             try:
@@ -230,11 +244,16 @@ class JobRegistry:
                         continue
                     job.push_event(line)
                     if job.dropped_total >= MAX_DROPPED_EVENTS:
-                        self._stop_monitor(job, "monitor stopped: too much output; remount with a tighter filter")
+                        self._stop_monitor(
+                            job, "monitor stopped: too much output; remount with a tighter filter"
+                        )
                         break
             except ValueError:
                 # An overlong single line stops the monitor and produces a final event
-                self._stop_monitor(job, "monitor stopped: a single line was too long; truncate or filter it in the command")
+                self._stop_monitor(
+                    job,
+                    "monitor stopped: a single line was too long; truncate or filter it in the command",
+                )
                 await proc.wait()
                 return
             returncode = await proc.wait()
@@ -245,7 +264,9 @@ class JobRegistry:
             # The exit message also goes through the event channel; marking it notified keeps
             # it from being sent again as a job completion notice
             job.notified = True
-            job.pending_events.append(f"[monitor stopped: the watched command exited on its own, exit code {returncode}]")
+            job.pending_events.append(
+                f"[monitor stopped: the watched command exited on its own, exit code {returncode}]"
+            )
         finally:
             log_file.close()
             if timer:
@@ -254,7 +275,10 @@ class JobRegistry:
     async def _monitor_timeout(self, job: Job, timeout: float) -> None:
         await asyncio.sleep(timeout)
         if job.status == "running":
-            self._stop_monitor(job, f"monitor stopped: reached the {int(timeout)}s timeout; remount if you still need it")
+            self._stop_monitor(
+                job,
+                f"monitor stopped: reached the {int(timeout)}s timeout; remount if you still need it",
+            )
 
     def _stop_monitor(self, job: Job, note: str) -> None:
         # The stop notice is queued directly, bypassing the rate limit
@@ -276,9 +300,11 @@ class JobRegistry:
         return out
 
     def get(self, job_id: str) -> Job | None:
+        """Look up a job by id, or None when it does not exist."""
         return self._jobs.get(job_id)
 
     def list(self) -> list[Job]:
+        """Every job known to this registry."""
         return list(self._jobs.values())
 
     def running(self, background: bool | None = None) -> list[Job]:
@@ -287,7 +313,8 @@ class JobRegistry:
         or background jobs (True).
         """
         return [
-            j for j in self._jobs.values()
+            j
+            for j in self._jobs.values()
             if j.status == "running" and (background is None or j.background is background)
         ]
 
@@ -300,6 +327,7 @@ class JobRegistry:
             job.background = True
 
     def kill(self, job_id: str) -> bool:
+        """Terminate a running job and return whether it was terminated."""
         job = self._jobs.get(job_id)
         if job is None or job.status != "running":
             return False
@@ -312,7 +340,12 @@ class JobRegistry:
         return True
 
     def pop_unnotified(self) -> list[Job]:
-        done = [j for j in self._jobs.values() if j.background and j.status != "running" and not j.notified]
+        """Take the finished background jobs and mark them notified."""
+        done = [
+            j
+            for j in self._jobs.values()
+            if j.background and j.status != "running" and not j.notified
+        ]
         for job in done:
             job.notified = True
         return done
@@ -339,8 +372,6 @@ def _kill_process_tree(pid: int) -> None:
     if os.name == "nt":
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
     else:
-        try:
+        # The process already exited, or it belongs to another user
+        with suppress(ProcessLookupError, PermissionError):
             os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            # The process already exited, or it belongs to another user
-            pass

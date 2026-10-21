@@ -14,6 +14,7 @@ Each session is a self-contained directory:
 Keeping every per-session artifact in one bundle means a session can be deleted,
 exported or inspected with a single directory operation.
 """
+
 import json
 import os
 import shutil
@@ -42,14 +43,17 @@ def session_dir(session_id: str) -> Path:
 
 
 def session_file(session_id: str) -> Path:
+    """Path of the session transcript inside its bundle."""
     return session_dir(session_id) / TRANSCRIPT_NAME
 
 
 def meta_file(session_id: str) -> Path:
+    """Path of the session metadata file inside its bundle."""
     return session_dir(session_id) / META_NAME
 
 
 def new_session_id() -> str:
+    """Generate an id for a new session bundle."""
     return str(uuid.uuid4())
 
 
@@ -124,9 +128,7 @@ def load_history(session_id: str) -> list:
     if not lines:
         return []
 
-    return ModelMessagesTypeAdapter.validate_python(
-        [json.loads(line) for line in lines]
-    )
+    return ModelMessagesTypeAdapter.validate_python([json.loads(line) for line in lines])
 
 
 def first_prompt(path: Path) -> str:
@@ -145,7 +147,9 @@ def first_prompt(path: Path) -> str:
                 if part.get("part_kind") != "user-prompt":
                     continue
                 content = str(part.get("content", ""))
-                if content.startswith(("<system-reminder>", "<task-notification>", "<monitor-event>")):
+                if content.startswith(
+                    ("<system-reminder>", "<task-notification>", "<monitor-event>")
+                ):
                     continue
                 return content
     return "(empty session)"

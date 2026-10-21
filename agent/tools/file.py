@@ -10,14 +10,15 @@ never read, or was modified after being read. This structurally prevents both
 readFileState is dependency-injected through RunContext, so each session gets its
 own isolated instance.
 """
+
 import os
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 
-from ..file_state import ReadFileState
-
 from media import images
+
+from ..file_state import ReadFileState
 
 # Maximum lines read when no limit is given; anything beyond is truncated with a
 # hint to continue using offset
@@ -42,7 +43,9 @@ def _with_line_numbers(content: str, start_line: int = 1) -> str:
     return "\n".join(f"{i:>{width}}\t{line}" for i, line in enumerate(lines, start_line))
 
 
-def read_and_register(state: ReadFileState, path: str, offset: int = 1, limit: int | None = None) -> str:
+def read_and_register(
+    state: ReadFileState, path: str, offset: int = 1, limit: int | None = None
+) -> str:
     """
     Read a file, slice it by offset/limit, register it in readFileState, and
     return the content with line numbers.
@@ -50,7 +53,7 @@ def read_and_register(state: ReadFileState, path: str, offset: int = 1, limit: i
     in via @ look identical in readFileState to files the model read itself.
     """
     # 1. Read the whole file
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         content = f.read()
 
     # 2. Slice by offset/limit; without a limit, take at most DEFAULT_MAX_LINES
@@ -75,7 +78,9 @@ def read_and_register(state: ReadFileState, path: str, offset: int = 1, limit: i
     return result
 
 
-def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit: int | None = None) -> str:
+def read_file(
+    ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit: int | None = None
+) -> str:
     """
     Read a file's contents with line numbers (cat -n style).
     For large files, read in chunks with offset and limit instead of all at once.
@@ -93,35 +98,47 @@ def read_file(ctx: RunContext[ReadFileState], path: str, offset: int = 1, limit:
         try:
             return images.load_image(path)
         except images.ImageError as e:
-            raise ModelRetry(str(e))
-        
+            raise ModelRetry(str(e)) from e
+
     # 1. Deduplicate: recorded in readFileState, came from read_file (offset not
     # None), same range, same mtime -> skip
     state = ctx.deps.read_file_state
     record = state.get(path)
-    if record is not None and record.get("offset") is not None:
-        if record["offset"] == offset and record["limit"] == limit:
-            try:
-                if os.path.getmtime(path) <= record["timestamp"]:
-                    return "File contents are unchanged; refer to the previous read_file result instead of reading again"
-            except FileNotFoundError:
-                pass
+    if (
+        record is not None
+        and record.get("offset") is not None
+        and record["offset"] == offset
+        and record["limit"] == limit
+    ):
+        try:
+            if os.path.getmtime(path) <= record["timestamp"]:
+                return "File contents are unchanged; refer to the previous read_file result instead of reading again"
+        except FileNotFoundError:
+            pass
 
     # 2. Reading and registration both go through read_and_register; translate
     # exceptions here into ModelRetry feedback for the model
     try:
         return read_and_register(state, path, offset, limit)
     except FileNotFoundError:
-        raise ModelRetry(f"File {path} does not exist; verify the path or pick another file")
+        raise ModelRetry(
+            f"File {path} does not exist; verify the path or pick another file"
+        ) from None
     except PermissionError:
-        raise ModelRetry(f"No permission to read {path}; pick a readable file")
+        raise ModelRetry(f"No permission to read {path}; pick a readable file") from None
     except IsADirectoryError:
-        raise ModelRetry(f"{path} is a directory; specify a file inside it")
+        raise ModelRetry(f"{path} is a directory; specify a file inside it") from None
     except UnicodeDecodeError:
         return f"Error: {path} is not a text file and cannot be read"
 
 
-def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+def edit_file(
+    ctx: RunContext[ReadFileState],
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> str:
     """
     Replace an exact string in a file, passing only the changed snippet to save tokens.
     The file must be read with read_file first, otherwise this raises an error.
@@ -145,16 +162,20 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
     state = ctx.deps.read_file_state
     record = state.get(path)
     if record is None:
-        raise ModelRetry(f"{path} has not been read yet; use read_file first, then edit based on the real content")
+        raise ModelRetry(
+            f"{path} has not been read yet; use read_file first, then edit based on the real content"
+        )
 
     # 3. mtime guard: the file changed after it was read, so editing from the old
     # content would clobber those changes; send it back to re-read
     try:
         current_mtime = os.path.getmtime(path)
     except FileNotFoundError:
-        raise ModelRetry(f"{path} no longer exists and cannot be edited")
+        raise ModelRetry(f"{path} no longer exists and cannot be edited") from None
     if current_mtime > record["timestamp"]:
-        raise ModelRetry(f"{path} was modified after you read it; call read_file again for the latest content before editing")
+        raise ModelRetry(
+            f"{path} was modified after you read it; call read_file again for the latest content before editing"
+        )
 
     # 4. Uniqueness check: count occurrences in the content snapshot recorded at
     # read time. Zero means it cannot be edited; several matches without
@@ -162,7 +183,9 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
     snapshot = record["content"]
     count = snapshot.count(old_string)
     if count == 0:
-        raise ModelRetry("old_string was not found in the file; check the original text against read_file's output")
+        raise ModelRetry(
+            "old_string was not found in the file; check the original text against read_file's output"
+        )
     if count > 1 and not replace_all:
         raise ModelRetry(
             f"old_string appears {count} times in the file; add context to make it unique, or pass replace_all=true to replace all"
@@ -171,7 +194,7 @@ def edit_file(ctx: RunContext[ReadFileState], path: str, old_string: str, new_st
     # 5. All checks passed; re-read the latest content from disk before replacing.
     # A permission prompt sits between validation and writing, during which the
     # file may change, so the on-disk content wins
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         content = f.read()
 
     # 6. Plain string replacement; the red/green diff in the terminal is display
@@ -208,9 +231,13 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
     if os.path.exists(path):
         record = state.get(path)
         if record is None:
-            raise ModelRetry(f"{path} already exists; read it with read_file first to confirm nothing is lost")
+            raise ModelRetry(
+                f"{path} already exists; read it with read_file first to confirm nothing is lost"
+            )
         if os.path.getmtime(path) > record["timestamp"]:
-            raise ModelRetry(f"{path} was modified after you read it; call read_file again before overwriting")
+            raise ModelRetry(
+                f"{path} was modified after you read it; call read_file again before overwriting"
+            )
     # Checkpoint pre-mutation state before writing to disk
     if ctx.deps.file_history:
         ctx.deps.file_history.track_edit(path)
@@ -218,9 +245,11 @@ def write_file(ctx: RunContext[ReadFileState], path: str, content: str) -> str:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     except FileNotFoundError:
-        raise ModelRetry(f"Directory does not exist, cannot write {path}; use an existing directory")
+        raise ModelRetry(
+            f"Directory does not exist, cannot write {path}; use an existing directory"
+        ) from None
     except PermissionError:
-        raise ModelRetry(f"No permission to write {path}; use a writable path")
+        raise ModelRetry(f"No permission to write {path}; use a writable path") from None
     except OSError as e:
         return f"Error: failed to write {path} ({e})"
     # Newly written content is registered too, so later edits need not re-read it

@@ -2,6 +2,7 @@
 Image input: recognize image files, normalize them into the form the model accepts, and
 read images from the system clipboard.
 """
+
 import asyncio
 import io
 import os
@@ -129,7 +130,7 @@ def build_user_content(
         index = int(match.group(1)) - 1
         if index < 0 or index >= len(attachments):
             continue
-        before = text[cursor:match.start()]
+        before = text[cursor : match.start()]
         if before:
             content.append(before)
         if index not in inserted:
@@ -171,14 +172,20 @@ def _save_command(path: str) -> list[str]:
     return {
         "Darwin": [
             "osascript",
-            "-e", "set png_data to (the clipboard as «class PNGf»)",
-            "-e", f'set fp to open for access POSIX file "{path}" with write permission',
-            "-e", "write png_data to fp",
-            "-e", "close access fp",
+            "-e",
+            "set png_data to (the clipboard as «class PNGf»)",
+            "-e",
+            f'set fp to open for access POSIX file "{path}" with write permission',
+            "-e",
+            "write png_data to fp",
+            "-e",
+            "close access fp",
         ],
         "Linux": ["sh", "-c", f'xclip -selection clipboard -t image/png -o > "{path}"'],
         "Windows": [
-            "powershell", "-NoProfile", "-Command",
+            "powershell",
+            "-NoProfile",
+            "-Command",
             f"$img = Get-Clipboard -Format Image; if ($img) {{ $img.Save('{path}') }}",
         ],
     }[platform.system()]

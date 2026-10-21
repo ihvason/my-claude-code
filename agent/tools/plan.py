@@ -2,6 +2,7 @@
 Plan mode tools: enter_plan_mode lets the model enter plan mode on its own, exit_plan_mode
 submits the written plan for user approval.
 """
+
 from pydantic_ai import RunContext
 
 from security import permissions

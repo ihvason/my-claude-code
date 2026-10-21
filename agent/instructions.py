@@ -5,6 +5,7 @@ Kept in its own leaf module (it only depends on memory.instructions) so that
 modules outside the agent package, such as memory.background, can reuse the
 prompt without importing the fully wired agent instance from agent.core.
 """
+
 from memory.instructions import MEMORY_INSTRUCTIONS
 
 INSTRUCTIONS = (

@@ -2,6 +2,7 @@
 run_agent tool: delegates a task to a sub agent, which runs as an agent-type background
 job in the same registry as background commands.
 """
+
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 
@@ -42,4 +43,7 @@ async def run_agent(
         description,
         lambda job: subagents.run_subagent(atype, prompt, job, ctx.deps),
     )
-    return _background_notice(job, f"Sub agent started in the background, job id: {job.id}; the completion notice carries its final report in the <result> field")
+    return _background_notice(
+        job,
+        f"Sub agent started in the background, job id: {job.id}; the completion notice carries its final report in the <result> field",
+    )

@@ -1,15 +1,17 @@
 """
 Constructs system-reminder text. Actual injection is hooked in agent/hooks.py.
 """
+
 from html import escape as escape_xml
 
 from rich.markup import escape
 
+from core.console import console
 from state.jobs import JobRegistry
 from state.tasks import TasksStore
-from core.console import console
 
 from .file_state import ReadFileState
+
 
 def _wrap(lines: list[str]) -> str:
     return f"<system-reminder>\n{chr(10).join(lines)}\n</system-reminder>"
@@ -100,9 +102,13 @@ def build_monitor_event_text(registry: JobRegistry | None) -> str | None:
             notice += f" ({dropped} more omitted)"
         console.print(f"[cyan]●[/] {notice}\n")
         omitted = (
-            f"<dropped>{dropped} event(s) were omitted because output came too fast; "
-            "remount with a tighter filter if you need them</dropped>\n"
-        ) if dropped else ""
+            (
+                f"<dropped>{dropped} event(s) were omitted because output came too fast; "
+                "remount with a tighter filter if you need them</dropped>\n"
+            )
+            if dropped
+            else ""
+        )
         description = escape_xml(job.description, quote=False)
         event_text = escape_xml(chr(10).join(events), quote=False)
         blocks.append(

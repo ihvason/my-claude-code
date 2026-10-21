@@ -9,6 +9,7 @@ a ❯ pointer and dim descriptions.
 in_terminal() temporarily yields the persistent Repl input line to this picker
 Application and restores it afterwards.
 """
+
 from dataclasses import dataclass, field
 
 from prompt_toolkit.application import Application, in_terminal
@@ -27,23 +28,25 @@ from core.console import console
 # ready, blue for the pointer and the current label, grey for descriptions.
 # Kept at module level so every picker reuses one style object instead of
 # rebuilding it from_dict each time
-_STYLE = Style.from_dict({
-    "nav-arrow": "#9ca3af",
-    "nav-arrow-dim": "#4b5563",
-    "chip-current": "bg:#5b21b6 #ffffff bold",
-    "chip-answered": "#9ca3af",
-    "chip-pending": "#6b7280",
-    "chip-submit-ready": "#10b981 bold",
-    "question": "bold",
-    "row-current": "#3b82f6 bold",
-    "row": "",
-    "label-current": "#3b82f6 bold",
-    "label": "",
-    "label-dim": "#9ca3af",
-    "desc": "#6b7280",
-    "footer": "#6b7280",
-    "text-input-label": "#9ca3af",
-})
+_STYLE = Style.from_dict(
+    {
+        "nav-arrow": "#9ca3af",
+        "nav-arrow-dim": "#4b5563",
+        "chip-current": "bg:#5b21b6 #ffffff bold",
+        "chip-answered": "#9ca3af",
+        "chip-pending": "#6b7280",
+        "chip-submit-ready": "#10b981 bold",
+        "question": "bold",
+        "row-current": "#3b82f6 bold",
+        "row": "",
+        "label-current": "#3b82f6 bold",
+        "label": "",
+        "label-dim": "#9ca3af",
+        "desc": "#6b7280",
+        "footer": "#6b7280",
+        "text-input-label": "#9ca3af",
+    }
+)
 
 # Fixed hint line for text-input mode; also module-level so the FormattedText is
 # not rebuilt on every frame
@@ -55,6 +58,7 @@ class QuestionOption:
     """
     A single option within a question.
     """
+
     # Display text for the option (1-5 words is ideal)
     label: str
     # What the option means / what happens if it is chosen
@@ -66,6 +70,7 @@ class Question:
     """
     A single multiple-choice question.
     """
+
     # The full question text; should end with a question mark
     question: str
     # Label of at most 12 characters, rendered in the top chip bar
@@ -85,6 +90,7 @@ class _QuestionState:
     custom_text is the text entered through "Other": additive with picks in
     multi-select, mutually exclusive with them in single-select.
     """
+
     # Index of the highlighted row in the option list (0..len(options)); the last
     # row is "Other"
     cursor: int = 0
@@ -200,7 +206,9 @@ class _Picker:
 
     def _render_question_text(self):
         if self._on_submit():
-            return FormattedText([("class:question", "All questions answered - press Enter to submit")])
+            return FormattedText(
+                [("class:question", "All questions answered - press Enter to submit")]
+            )
         return FormattedText([("class:question", self._current_q().question)])
 
     def _render_options(self):
@@ -218,13 +226,11 @@ class _Picker:
         lines: list[tuple[str, str]] = []
 
         for i, opt in enumerate(q.options):
-            is_cursor = (i == s.cursor)
+            is_cursor = i == s.cursor
             is_picked = opt.label in s.picks
             pointer = "❯" if is_cursor else " "
-            if q.multi_select:
-                mark = "☑ " if is_picked else "☐ "
-            else:
-                mark = "● " if is_picked else "  "
+            picked_mark, empty_mark = ("☑ ", "☐ ") if q.multi_select else ("● ", "  ")
+            mark = picked_mark if is_picked else empty_mark
 
             cls_row = "class:row-current" if is_cursor else "class:row"
             cls_label = "class:label-current" if is_cursor else "class:label"
@@ -238,7 +244,7 @@ class _Picker:
 
         # Trailing "Other" row: echo back any text already entered
         other_idx = len(q.options)
-        is_cursor = (s.cursor == other_idx)
+        is_cursor = s.cursor == other_idx
         pointer = "❯" if is_cursor else " "
         cls_row = "class:row-current" if is_cursor else "class:row"
         cls_label = "class:label-current" if is_cursor else "class:label-dim"
@@ -255,9 +261,18 @@ class _Picker:
         Bottom help line; its contents change with the current mode.
         """
         if self.in_text_input:
-            return FormattedText([("class:footer", "  Enter to confirm · Esc to discard text input")])
+            return FormattedText(
+                [("class:footer", "  Enter to confirm · Esc to discard text input")]
+            )
         if self._on_submit():
-            return FormattedText([("class:footer", "  Enter to submit · ← back to previous question · Esc to cancel")])
+            return FormattedText(
+                [
+                    (
+                        "class:footer",
+                        "  Enter to submit · ← back to previous question · Esc to cancel",
+                    )
+                ]
+            )
         q = self._current_q()
         hints = ["↑↓ options"]
         if q.multi_select:
@@ -457,29 +472,39 @@ class _Picker:
 
         # One Window per region
         nav_win = Window(FormattedTextControl(self._render_nav), height=1)
-        question_win = Window(FormattedTextControl(self._render_question_text), wrap_lines=True, dont_extend_height=True)
+        question_win = Window(
+            FormattedTextControl(self._render_question_text),
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
         options_win = Window(FormattedTextControl(self._render_options), dont_extend_height=True)
         text_win = ConditionalContainer(
-            HSplit([
-                # Hint line for text-input mode; module-level constant, so every
-                # frame returns the same object
-                Window(FormattedTextControl(lambda: _TEXT_INPUT_LABEL), height=1),
-                Window(BufferControl(buffer=self.text_buffer), height=1),
-            ]),
+            HSplit(
+                [
+                    # Hint line for text-input mode; module-level constant, so every
+                    # frame returns the same object
+                    Window(FormattedTextControl(lambda: _TEXT_INPUT_LABEL), height=1),
+                    Window(BufferControl(buffer=self.text_buffer), height=1),
+                ]
+            ),
             filter=text,
         )
         footer_win = Window(FormattedTextControl(self._render_footer), height=1)
 
-        layout = Layout(HSplit([
-            nav_win,
-            Window(height=1, char=" "),
-            question_win,
-            Window(height=1, char=" "),
-            options_win,
-            text_win,
-            Window(height=1, char=" "),
-            footer_win,
-        ]))
+        layout = Layout(
+            HSplit(
+                [
+                    nav_win,
+                    Window(height=1, char=" "),
+                    question_win,
+                    Window(height=1, char=" "),
+                    options_win,
+                    text_win,
+                    Window(height=1, char=" "),
+                    footer_win,
+                ]
+            )
+        )
 
         return Application(
             layout=layout,
@@ -496,10 +521,7 @@ class _Picker:
         submitted = await self.app.run_async()
         if self.cancelled or not submitted:
             return None
-        return {
-            q.question: self._answer_for(i)
-            for i, q in enumerate(self.questions)
-        }
+        return {q.question: self._answer_for(i) for i, q in enumerate(self.questions)}
 
 
 async def ask_user_question(questions: list[Question]) -> str:

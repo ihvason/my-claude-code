@@ -5,38 +5,37 @@ Initializes session state, coordinates the persistent REPL interface,
 dispatches slash commands, and steps through Pydantic AI agent graph nodes
 to stream thoughts, tool calls, and responses in real time.
 """
+
 import asyncio
+import contextlib
 import os
 
 from pydantic_ai import Agent
 from pydantic_graph import End
 
-from state import sessions as session
-from media import images
-from integrations import mcp as mcp_servers
-from security import permissions
-from agent import MODEL_NAME, agent, api_call_log
-from agent import compact, plan_mode, skills, subagents
+from agent import MODEL_NAME, agent, api_call_log, compact, plan_mode, skills, subagents
 from agent.deps import AgentDeps
 from agent.reminders import build_job_notifications
-from state.tasks import TasksStore
-from state.file_history import FileHistory
-from state.jobs import JobRegistry
-from memory import background, recall, store
-from ui.commands import (
-    COMMANDS,
-    SessionState,
-    console,
-    print_part,
-    print_welcome_banner,
-)
-from ui.input_ui import Repl
+from core.console import console, print_welcome_banner
+from integrations import mcp as mcp_servers
+from media import images
 from media.mentions import (
     build_mention_messages,
     extract_at_mentions,
     replace_image_mentions,
 )
-
+from memory import background, recall, store
+from security import permissions
+from state import sessions as session
+from state.file_history import FileHistory
+from state.jobs import JobRegistry
+from state.tasks import TasksStore
+from ui.commands import (
+    COMMANDS,
+    SessionState,
+    print_part,
+)
+from ui.input_ui import Repl
 
 os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
 
@@ -102,7 +101,9 @@ async def run_agent_loop(user_input, state, attachments=None):
         plan_file=plan_mode.plan_file_path(state.session_id),
     )
     async with agent.iter(
-        user_input, message_history=state.history, deps=deps,
+        user_input,
+        message_history=state.history,
+        deps=deps,
         toolsets=mcp_servers.active_toolsets(),
     ) as run:
         node = run.next_node
@@ -222,9 +223,7 @@ async def main():
         )
 
         # Text files go into the history; image @paths become image placeholders in place
-        agent_input, mentioned_images = inject_at_mentions(
-            user_input, state, len(attachments) + 1
-        )
+        agent_input, mentioned_images = inject_at_mentions(user_input, state, len(attachments) + 1)
         attachments = attachments + mentioned_images
 
         # Core agent loop: show 'Working...' on start, cleared on completion or interrupt;
@@ -276,7 +275,8 @@ async def main():
                 if req is None:
                     continue
                 choice = await permissions.prompt_approval(
-                    req.tool_name, req.args,
+                    req.tool_name,
+                    req.args,
                     requester=f"Sub agent {req.job.description!r} (job {req.job.id}) requests: ",
                 )
                 if not req.future.done():
@@ -306,7 +306,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt, EOFError):
         asyncio.run(main())
-    except (KeyboardInterrupt, EOFError):
-        pass

@@ -1,13 +1,12 @@
 """
 Agent instantiation: wires model / instructions / tools / hooks together.
 """
+
 import os
 import platform
 from datetime import date
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.deepseek import DeepSeekProvider
 
 from core.paths import find_agents_md
 from memory import store
@@ -18,7 +17,6 @@ from .hooks import hooks
 from .instructions import INSTRUCTIONS
 from .model import model
 from .tools import TOOLS
-
 
 agent = Agent(
     model,
@@ -35,6 +33,7 @@ agent = Agent(
 # remaining invisible to users without polluting context history.
 @agent.instructions
 def project_context() -> str:
+    """Environment, AGENTS.md, agent types, skills and memory index for each request."""
     cwd = os.getcwd()
     parts = [
         "Environment context:",
@@ -74,7 +73,9 @@ def project_context() -> str:
     index = store.read_index()
     if index:
         parts.append("")
-        parts.append(f"Below is your memory index MEMORY.md (located at {store.index_path()}, preserved across sessions). Use read_file on the corresponding file in the memory directory whenever you need the full content of a memory:")
+        parts.append(
+            f"Below is your memory index MEMORY.md (located at {store.index_path()}, preserved across sessions). Use read_file on the corresponding file in the memory directory whenever you need the full content of a memory:"
+        )
         parts.append(index)
 
     return "\n".join(parts)

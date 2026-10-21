@@ -10,15 +10,16 @@ The TUI panel invokes list() on every spinner tick (~100ms); without caching, th
 Designed for single-process use without file locking; concurrent writes across multiple processes
 to the same session_id directory will cause race conditions.
 """
+
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Literal
 
 from core.paths import get_session_dir
-
 
 # Only these three statuses are persisted to disk; 'deleted' is a pseudo-status signal during update that triggers deletion instead of serialization.
 TaskStatus = Literal["pending", "in_progress", "completed"]
@@ -63,6 +64,7 @@ class TasksStore:
     # ---------- Public API ----------
 
     def create(self, subject: str, description: str, active_form: str | None = None) -> str:
+        """Create a task, persist it, and return its id."""
         # id = max(current IDs, highwatermark) + 1; deleted IDs are never reused.
         current_max = max((int(tid) for tid in self._tasks), default=0)
         next_id = max(current_max, self._highwatermark) + 1
@@ -77,27 +79,37 @@ class TasksStore:
         return task.id
 
     def list(self) -> list[Task]:
+        """All tasks sorted by ascending numeric id, served from memory."""
         # Return tasks sorted by ascending numeric ID to match UI and task_list output; served from memory without disk I/O.
         return sorted(self._tasks.values(), key=lambda t: int(t.id))
 
     def get(self, task_id: str) -> Task | None:
+        """Look up a task by id, or None when it does not exist."""
         return self._tasks.get(task_id)
 
     def update(self, task_id: str, **fields) -> Task:
+        """Apply field updates to a task, persist it, and return the new value."""
         # add_blocks and add_blocked_by have append semantics and are handled separately; remaining fields overwrite via dataclasses.replace for type safety.
         task = self._tasks.get(task_id)
         if task is None:
             raise KeyError(f"task #{task_id} not found")
         add_blocks = fields.pop("add_blocks", None)
         add_blocked_by = fields.pop("add_blocked_by", None)
-        new_blocks = list(dict.fromkeys(task.blocks + list(add_blocks))) if add_blocks else task.blocks
-        new_blocked_by = list(dict.fromkeys(task.blocked_by + list(add_blocked_by))) if add_blocked_by else task.blocked_by
+        new_blocks = (
+            list(dict.fromkeys(task.blocks + list(add_blocks))) if add_blocks else task.blocks
+        )
+        new_blocked_by = (
+            list(dict.fromkeys(task.blocked_by + list(add_blocked_by)))
+            if add_blocked_by
+            else task.blocked_by
+        )
         updated = replace(task, **fields, blocks=new_blocks, blocked_by=new_blocked_by)
         self._tasks[task_id] = updated
         self._write(updated)
         return updated
 
     def delete(self, task_id: str) -> None:
+        """Delete a task and its file; the id is never reused."""
         if task_id not in self._tasks:
             raise KeyError(f"task #{task_id} not found")
         # Update highwatermark before deletion to prevent subsequent allocations from reusing deleted IDs.

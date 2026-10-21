@@ -4,6 +4,7 @@ Shared path utilities and project-root discovery.
 This module is a leaf: it imports only the standard library, so every other layer
 (state/, security/, agent/, ui/) can depend on it without creating a cycle.
 """
+
 import re
 from functools import cache
 from pathlib import Path

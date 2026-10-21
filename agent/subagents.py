@@ -6,6 +6,7 @@ A sub agent is a second Agent instance: a fresh context (no message_history), it
 system prompt, and a trimmed tool set. The tool set excludes run_agent, so a sub agent
 cannot dispatch another one.
 """
+
 import asyncio
 import dataclasses
 import os
@@ -90,6 +91,7 @@ class PendingApproval:
     """
     An approval request bubbled up from a sub agent, waiting for the user's answer.
     """
+
     job: Job
     tool_name: str
     args: dict
@@ -172,7 +174,9 @@ _TOOL_FUNCS = {
 def _build_tools(tool_names: list[str]) -> list:
     # Each Agent instance gets fresh Tool wrappers; file-modifying tools stay sequential=True
     return [
-        Tool(_TOOL_FUNCS[name], sequential=True) if name in ("edit_file", "write_file") else _TOOL_FUNCS[name]
+        Tool(_TOOL_FUNCS[name], sequential=True)
+        if name in ("edit_file", "write_file")
+        else _TOOL_FUNCS[name]
         for name in tool_names
     ]
 
@@ -255,32 +259,39 @@ PLAN_INSTRUCTIONS = (
     "Finish with the approach: the implementation steps in order, the risks to watch, and finally the 3-5 files most critical to the implementation. The caller only sees this final report, not your intermediate steps, so the report must stand on its own."
 )
 
-_register(AgentType(
-    name="explore",
-    description="Read-only code investigation agent: searches and reads code to answer questions such as \"where is X\" or \"how is Y implemented\", making no changes",
-    tool_names=["read_file", "load_skill", "run_command"],
-    instructions=EXPLORE_INSTRUCTIONS,
-    source="built-in",
-))
+_register(
+    AgentType(
+        name="explore",
+        description='Read-only code investigation agent: searches and reads code to answer questions such as "where is X" or "how is Y implemented", making no changes',
+        tool_names=["read_file", "load_skill", "run_command"],
+        instructions=EXPLORE_INSTRUCTIONS,
+        source="built-in",
+    )
+)
 
-_register(AgentType(
-    name="general",
-    description="General purpose agent that can read and write files and run commands; suited to multi-step subtasks such as writing tests or fixing an isolated bug",
-    tool_names=list(_TOOL_FUNCS),
-    instructions=GENERAL_INSTRUCTIONS,
-    source="built-in",
-))
+_register(
+    AgentType(
+        name="general",
+        description="General purpose agent that can read and write files and run commands; suited to multi-step subtasks such as writing tests or fixing an isolated bug",
+        tool_names=list(_TOOL_FUNCS),
+        instructions=GENERAL_INSTRUCTIONS,
+        source="built-in",
+    )
+)
 
-_register(AgentType(
-    name="plan",
-    description="Read-only design agent: given the request and investigation results, designs the implementation approach with steps, key files and risks, making no changes",
-    tool_names=["read_file", "run_command"],
-    instructions=PLAN_INSTRUCTIONS,
-    source="built-in",
-))
+_register(
+    AgentType(
+        name="plan",
+        description="Read-only design agent: given the request and investigation results, designs the implementation approach with steps, key files and risks, making no changes",
+        tool_names=["read_file", "run_command"],
+        instructions=PLAN_INSTRUCTIONS,
+        source="built-in",
+    )
+)
 
 
 # ---------- Custom agent loading ----------
+
 
 def load_agent_types() -> list[AgentType]:
     """
@@ -304,12 +315,18 @@ def load_agent_types() -> list[AgentType]:
         name = fields.get("name", "")
         description = fields.get("description", "")
         if not name or not description:
-            raise RuntimeError(f"Custom agent {path} is missing the required name or description frontmatter field")
+            raise RuntimeError(
+                f"Custom agent {path} is missing the required name or description frontmatter field"
+            )
         if name in _TYPES:
-            raise RuntimeError(f"Custom agent {path} uses the name {name!r}, which collides with an existing agent type")
+            raise RuntimeError(
+                f"Custom agent {path} uses the name {name!r}, which collides with an existing agent type"
+            )
         body = _read_body(path)
         if not body:
-            raise RuntimeError(f"Custom agent {path} has an empty body; the body is the agent's system prompt")
+            raise RuntimeError(
+                f"Custom agent {path} has an empty body; the body is the agent's system prompt"
+            )
         atype = AgentType(
             name=name,
             description=description,
@@ -347,10 +364,12 @@ def _parse_tools_field(value: str | None, path: Path) -> list[str]:
 
 
 def get_agent_type(name: str) -> AgentType | None:
+    """Look up a registered agent type by name, or None."""
     return _TYPES.get(name)
 
 
 def list_agent_types() -> list[AgentType]:
+    """Every registered agent type, built-in and custom."""
     return list(_TYPES.values())
 
 
@@ -365,6 +384,7 @@ def format_agent_listing() -> str:
 
 
 # ---------- Executor ----------
+
 
 async def run_subagent(atype: AgentType, prompt: str, job: Job, parent_deps: AgentDeps) -> None:
     """
@@ -388,12 +408,14 @@ async def run_subagent(atype: AgentType, prompt: str, job: Job, parent_deps: Age
         job_registry=sub_registry,
         subagent_job=job,
     )
-    log = open(job.log_path, "a", encoding="utf-8")
+    # The handle stays open for the whole run and is closed in the finally block below
+    log = open(job.log_path, "a", encoding="utf-8")  # noqa: SIM115
     log.write(f"=== sub agent {job.id} ({atype.name}) ===\nprompt: {prompt}\n\n")
     log.flush()
     try:
         async with atype.agent.iter(
-            prompt, deps=deps,
+            prompt,
+            deps=deps,
             usage_limits=UsageLimits(request_limit=MAX_SUBAGENT_REQUESTS),
         ) as run:
             node = run.next_node

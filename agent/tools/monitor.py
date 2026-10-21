@@ -2,6 +2,7 @@
 monitor tool: watch a long-running command and feed its non-empty output lines into the
 conversation as events.
 """
+
 from pydantic_ai import RunContext
 
 from security import permissions

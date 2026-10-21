@@ -5,6 +5,7 @@ and what to leave out, the two-step save procedure, and verifying before citing.
 Appended to the main agent's instructions in agent/core.py; the background memory
 agent reuses the same conventions through it.
 """
+
 from . import store
 
 MEMORY_INSTRUCTIONS = (
@@ -28,7 +29,7 @@ MEMORY_INSTRUCTIONS = (
     "<type>\n"
     "<name>feedback</name>\n"
     "<description>Corrections the user makes to how you work, or approval of a non-obvious approach</description>\n"
-    "<when_to_save>When the user corrects your approach (\"no\", \"don't do that\") or confirms that an unusual approach works (\"yes, that's it\", \"keep doing that\"). Corrections are easy to notice; approvals are quieter, so watch for them. Record the reason the user gave</when_to_save>\n"
+    '<when_to_save>When the user corrects your approach ("no", "don\'t do that") or confirms that an unusual approach works ("yes, that\'s it", "keep doing that"). Corrections are easy to notice; approvals are quieter, so watch for them. Record the reason the user gave</when_to_save>\n'
     "<how_to_use>Follow this feedback in the same situations, and use the reason to judge edge cases</how_to_use>\n"
     "<body_structure>State the rule first, then a **Why:** line (the user's reason - often an incident or a strong preference), then a **How to apply:** line (when and where it applies). Recording the why lets you judge edge cases instead of applying it mechanically</body_structure>\n"
     "<example>Always run tests after changing code. **Why:** once shipped without running tests and CI broke. **How to apply:** after any code change</example>\n"
@@ -36,7 +37,7 @@ MEMORY_INSTRUCTIONS = (
     "<type>\n"
     "<name>project</name>\n"
     "<description>What the project is doing, why, who owns it, and on what timeline</description>\n"
-    "<when_to_save>When you learn who is doing what, why, and by when. When saving, convert relative dates like \"Thursday\" into absolute dates (e.g. 2026-03-05) so the memory stays unambiguous as time passes</when_to_save>\n"
+    '<when_to_save>When you learn who is doing what, why, and by when. When saving, convert relative dates like "Thursday" into absolute dates (e.g. 2026-03-05) so the memory stays unambiguous as time passes</when_to_save>\n'
     "<how_to_use>Align planning and advice with the project's goals and cadence</how_to_use>\n"
     "<body_structure>State the fact first, then **Why:** (background) and **How to apply:** (impact on later work)</body_structure>\n"
     "<example>A merge freeze starts 2026-03-05 in preparation for the 2.0 release</example>\n"
@@ -57,7 +58,7 @@ MEMORY_INSTRUCTIONS = (
     "- Debugging conclusions and fixes - the fix lives in the code, the context in the commit message\n"
     "- Anything already documented in AGENTS.md\n"
     "- Temporary task details: work in progress, transient state, the current conversation's context\n"
-    "These exclusions hold even if the user explicitly asks you to save something. If the user asks you to store a PR list or an activity summary, ask back which part of it is \"surprising or non-obvious\" - that is the part worth keeping.\n"
+    'These exclusions hold even if the user explicitly asks you to save something. If the user asks you to store a PR list or an activity summary, ask back which part of it is "surprising or non-obvious" - that is the part worth keeping.\n'
     "\n"
     "## How to save a memory\n"
     "\n"
@@ -70,7 +71,7 @@ MEMORY_INSTRUCTIONS = (
     "type: one of user / feedback / project / reference\n"
     "---\n"
     "\n"
-    "Memory body (for feedback / project types, use the \"rule/fact + **Why:** + **How to apply:**\" structure)\n"
+    'Memory body (for feedback / project types, use the "rule/fact + **Why:** + **How to apply:**" structure)\n'
     "\n"
     "**Step two** - add one line in MEMORY.md pointing to it. MEMORY.md is an index, not a memory - one line per entry, at most 150 characters: `- [title](filename.md) - one-line hook`. It carries no frontmatter; never write memory content directly into it.\n"
     "\n"
@@ -85,6 +86,6 @@ MEMORY_INSTRUCTIONS = (
     "When a memory mentions a function, file or config entry, it only claims that it existed when the memory was written - it may have been renamed, deleted, or never merged. Before advising based on it:\n"
     "- If the memory names a file path: confirm the file still exists\n"
     "- If the memory names a function or config entry: search for it\n"
-    "\"The memory says X exists\" does not mean \"X exists now\".\n"
+    '"The memory says X exists" does not mean "X exists now".\n'
     "A memory is a snapshot at a point in time. When a recalled memory conflicts with what you observe now, trust the present - and fix or delete the stale memory rather than acting on it."
 )

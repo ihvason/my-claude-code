@@ -5,6 +5,7 @@ All four interact with the underlying file-backed TasksStore via ctx.deps.tasks_
 The model uses these tools to break down multi-step tasks into pending tasks, mark the
 active one as in_progress, and transition it to completed upon completion.
 """
+
 from dataclasses import asdict
 from typing import Literal
 

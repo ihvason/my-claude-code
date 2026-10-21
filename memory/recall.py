@@ -3,14 +3,15 @@ Memory recall: before a user message enters the agent loop, send a separate LLM
 request to pick relevant memories from the manifest, then wrap them as
 system-reminder messages and inject them into the conversation history.
 """
+
 import json
 import os
 
 from openai import AsyncOpenAI
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from state import sessions as session
 from core.console import print_step
+from state import sessions as session
 
 from . import store
 
@@ -50,7 +51,10 @@ async def _select(user_input: str, headers: list) -> list[str]:
             model=RECALL_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Latest input: {user_input}\n\nMemory manifest:\n{manifest}"},
+                {
+                    "role": "user",
+                    "content": f"Latest input: {user_input}\n\nMemory manifest:\n{manifest}",
+                },
             ],
             temperature=0,
             response_format={"type": "json_object"},
@@ -70,7 +74,9 @@ def _build_reminder(header) -> str:
     """
     content = header.path.read_text(encoding="utf-8")
     content = store.truncate_content(
-        content, store.MAX_MEMORY_LINES, store.MAX_MEMORY_BYTES,
+        content,
+        store.MAX_MEMORY_LINES,
+        store.MAX_MEMORY_BYTES,
         f"This memory was truncated; use read_file to view the full file: {header.path}",
     )
     days = store.age_days(header.mtime)
@@ -91,10 +97,7 @@ async def inject_memories(user_input: str, state) -> None:
     """
     if len(user_input.strip()) < MIN_INPUT_CHARS:
         return
-    headers = [
-        h for h in store.scan_memory_files()
-        if h.filename not in state.surfaced_memories
-    ]
+    headers = [h for h in store.scan_memory_files() if h.filename not in state.surfaced_memories]
     if not headers:
         return
     selected = await _select(user_input, headers)
@@ -112,7 +115,10 @@ async def inject_memories(user_input: str, state) -> None:
         injected.append(ModelRequest(parts=[UserPromptPart(content=text)]))
         state.surfaced_memories.add(filename)
         # Echo which memory was recalled so the user can see recall actually happened
-        print_step("[dim]◇ memory[/]", f"[dim]Recalled memory: {filename} ({store.age_text(store.age_days(header.mtime))})[/]")
+        print_step(
+            "[dim]◇ memory[/]",
+            f"[dim]Recalled memory: {filename} ({store.age_text(store.age_days(header.mtime))})[/]",
+        )
     if not injected:
         return
 

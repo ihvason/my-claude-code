@@ -2,9 +2,10 @@
 MCP server registry: reads server configs from .mcp.json, connects to them at
 startup, and exposes the connected servers to the Agent as toolsets.
 """
+
 import asyncio
 import json
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,7 @@ class ServerRecord:
     """
     Connection record for a single MCP server.
     """
+
     name: str
     # Toolset handed to the Agent, already prefixed with mcp__<server>__
     toolset: AbstractToolset | None = None
@@ -162,10 +164,8 @@ async def shutdown() -> None:
     Disconnect every server on exit; errors caused by already-dead child processes
     are ignored.
     """
-    try:
+    with suppress(Exception):
         await _stack.aclose()
-    except Exception:
-        pass
 
 
 def active_toolsets() -> list[AbstractToolset]:

@@ -5,6 +5,7 @@ memories worth saving, and periodically consolidate the memory files.
 Both jobs share one fork agent: same model and instructions as the main agent, but
 only file tools are attached and writes are gated to the memory directory.
 """
+
 import asyncio
 import time
 from pathlib import Path
@@ -13,13 +14,13 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.usage import UsageLimits
 
-from state import sessions as session
 from agent.deps import AgentDeps
 from agent.file_state import ReadFileState
 from agent.instructions import INSTRUCTIONS
 from agent.model import model
 from agent.tools.file import edit_file, read_file, write_file
 from core.console import print_step
+from state import sessions as session
 
 from . import store
 
@@ -44,7 +45,9 @@ async def _memory_write_gate(ctx, *, call, tool_def, args, handler):
     """
     if call.tool_name == "read_file":
         return await handler(args)
-    if call.tool_name in ("write_file", "edit_file") and store.is_memory_path(str(args.get("path", ""))):
+    if call.tool_name in ("write_file", "edit_file") and store.is_memory_path(
+        str(args.get("path", ""))
+    ):
         return await handler(args)
     return f"The background memory agent may only write files inside the memory directory; this {call.tool_name} call was denied."
 
@@ -124,7 +127,10 @@ async def _extract(history: list) -> None:
     )
     written = _written_memory_files(result.new_messages())
     if written:
-        print_step("[cyan]✦ memory[/]", f"[cyan dim]Background extraction saved memories: {', '.join(written)}[/]")
+        print_step(
+            "[cyan]✦ memory[/]",
+            f"[cyan dim]Background extraction saved memories: {', '.join(written)}[/]",
+        )
 
 
 # ---------- Dream: periodic memory consolidation ----------
@@ -193,7 +199,8 @@ def _dream_due(current_session_id: str) -> bool:
     # Count transcripts touched since the last consolidation, excluding the current
     # session - it is still in progress
     touched = [
-        p for p in session.SESSIONS_DIR.glob(f"*/{session.TRANSCRIPT_NAME}")
+        p
+        for p in session.SESSIONS_DIR.glob(f"*/{session.TRANSCRIPT_NAME}")
         if p.parent.name != current_session_id and p.stat().st_mtime > last
     ]
     return len(touched) >= DREAM_MIN_SESSIONS
@@ -214,7 +221,9 @@ async def dream(history: list, *, force: bool = False, session_id: str = "") -> 
     # The same fork agent does the work; only the task passed to run() changes to
     # the dream consolidation prompt
     result = await fork_agent.run(
-        _DREAM_PROMPT.format(memory_dir=store.memory_dir(), manifest=store.format_manifest(headers)),
+        _DREAM_PROMPT.format(
+            memory_dir=store.memory_dir(), manifest=store.format_manifest(headers)
+        ),
         message_history=history,
         deps=_fork_deps(),
         usage_limits=UsageLimits(request_limit=MAX_FORK_REQUESTS),
@@ -255,7 +264,10 @@ async def drain(timeout: float = 60) -> None:
     tasks = [t for t in _background_tasks if not t.done()]
     if not tasks:
         return
-    print_step("[dim]◇ memory[/]", "[dim]Waiting for background memory tasks to finish (Ctrl+C to force quit)...[/]")
+    print_step(
+        "[dim]◇ memory[/]",
+        "[dim]Waiting for background memory tasks to finish (Ctrl+C to force quit)...[/]",
+    )
     await asyncio.wait(tasks, timeout=timeout)
 
 
@@ -267,4 +279,7 @@ async def _run_background(history: list, new_messages: list, session_id: str) ->
         await dream(history, session_id=session_id)
     except Exception as e:
         # Background failures must not disturb the main flow; one line is enough
-        print_step("[yellow]⚠ memory[/]", f"[yellow]Background memory task failed: {type(e).__name__}: {e}[/]")
+        print_step(
+            "[yellow]⚠ memory[/]",
+            f"[yellow]Background memory task failed: {type(e).__name__}: {e}[/]",
+        )

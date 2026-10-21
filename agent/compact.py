@@ -5,6 +5,7 @@ much smaller history.
 The manual /compact command and automatic compaction share this flow; only the
 trigger differs.
 """
+
 import os
 import re
 
@@ -161,7 +162,7 @@ async def run_compact(state, custom_instructions: str = "") -> None:
     old_state = state.read_file_state
     state.read_file_state = ReadFileState()
     restored = restore_file_messages(old_state, state.read_file_state)
-    state.history = [build_summary_message(summary, transcript_path)] + restored
+    state.history = [build_summary_message(summary, transcript_path), *restored]
     # Rewrite the session file wholesale with the new history
     session.rewrite_messages(state.session_id, state.history)
 
@@ -178,7 +179,9 @@ async def run_compact(state, custom_instructions: str = "") -> None:
     state.compact_failures = 0
 
     # The compaction call's input_tokens is the pre-compaction context size
-    console.print(f"[magenta]✻ Compaction complete: context was {usage.input_tokens:,} tokens, rebuilt as one summary + {len(restored) // 2} recently read file(s)[/]")
+    console.print(
+        f"[magenta]✻ Compaction complete: context was {usage.input_tokens:,} tokens, rebuilt as one summary + {len(restored) // 2} recently read file(s)[/]"
+    )
     console.print(f"[dim]Full transcript archived at: {transcript_path}[/]")
     console.print(Padding(Markdown(summary), (0, 0, 0, 2)), style="dim")
     console.print()
@@ -196,12 +199,18 @@ async def auto_compact_if_needed(state) -> None:
     threshold = compact_threshold()
     if used < threshold:
         return
-    console.print(f"[yellow]Context near the limit ({used:,} / {threshold:,} tokens); compacting automatically[/]\n")
+    console.print(
+        f"[yellow]Context near the limit ({used:,} / {threshold:,} tokens); compacting automatically[/]\n"
+    )
     try:
         await run_compact(state)
         state.compact_failures = 0
     except Exception as e:
         state.compact_failures += 1
-        console.print(f"[yellow]Automatic compaction failed ({type(e).__name__}: {e}); continuing[/]\n")
+        console.print(
+            f"[yellow]Automatic compaction failed ({type(e).__name__}: {e}); continuing[/]\n"
+        )
         if state.compact_failures >= MAX_COMPACT_FAILURES:
-            console.print("[yellow]Automatic compaction failed repeatedly; not retrying in this session[/]\n")
+            console.print(
+                "[yellow]Automatic compaction failed repeatedly; not retrying in this session[/]\n"
+            )

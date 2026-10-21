@@ -2,6 +2,7 @@
 Skill discovery and progressive loading: only metadata is injected at startup, and the
 full SKILL.md is read once a task matches.
 """
+
 import json
 import re
 from dataclasses import dataclass
@@ -10,7 +11,6 @@ from pathlib import Path
 from pydantic_ai.exceptions import ModelRetry
 
 from core.paths import get_data_dir
-
 
 USER_SKILLS_DIR = Path.home() / ".my-claude-code" / "skills"
 PROJECT_SKILLS_SUBDIR = Path(".my-claude-code") / "skills"
@@ -105,12 +105,14 @@ def _scan_root(root: Path, source: str) -> list[SkillInfo]:
         fields = _read_frontmatter(path)
         if not _is_valid_metadata(fields, directory.name):
             continue
-        result.append(SkillInfo(
-            name=fields["name"],
-            description=fields["description"],
-            path=path,
-            source=source,
-        ))
+        result.append(
+            SkillInfo(
+                name=fields["name"],
+                description=fields["description"],
+                path=path,
+                source=source,
+            )
+        )
     return result
 
 
@@ -139,10 +141,7 @@ def discover_skills(
     user_root = user_skills_dir or USER_SKILLS_DIR
     # Collect user-level first, then overwrite by name with project-level, which gives
     # the desired override
-    by_name = {
-        skill.name: skill
-        for skill in _scan_root(user_root, "user")
-    }
+    by_name = {skill.name: skill for skill in _scan_root(user_root, "user")}
     for skill in _scan_root(project_root, "project"):
         by_name[skill.name] = skill
     return sorted(by_name.values(), key=lambda skill: skill.name)
@@ -161,10 +160,12 @@ def format_skill_listing(skills: list[SkillInfo]) -> str:
     lines.extend(f"- {skill.name}: {skill.description}" for skill in skills)
     # The listing also says when to call the loading tool, so the user only has to describe
     # the task
-    lines.extend([
-        "",
-        "When a skill matches the user's task, call load_skill before proceeding; do not load unrelated skills.",
-    ])
+    lines.extend(
+        [
+            "",
+            "When a skill matches the user's task, call load_skill before proceeding; do not load unrelated skills.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -179,7 +180,7 @@ def _read_body(path: Path) -> str:
         return content.strip()
     for index, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            return "\n".join(lines[index + 1:]).strip()
+            return "\n".join(lines[index + 1 :]).strip()
     return content.strip()
 
 
@@ -188,6 +189,7 @@ def read_skill(
     cwd: Path | None = None,
     user_skills_dir: Path | None = None,
 ) -> str:
+    """Return the full instruction body of a skill, prefixed with its root directory."""
     # Resolve again from the current directory, keeping the same override rule as discovery
     skills = {skill.name: skill for skill in discover_skills(cwd, user_skills_dir)}
     skill = skills.get(name.strip())
@@ -197,15 +199,12 @@ def read_skill(
     try:
         body = _read_body(skill.path)
     except (OSError, UnicodeError) as error:
-        raise ModelRetry(f"Cannot read skill {name}: {error}")
+        raise ModelRetry(f"Cannot read skill {name}: {error}") from error
     if not body:
         raise ModelRetry(f"Skill {name} has no instruction body")
     # Include the root directory so the model can resolve relative paths to references and
     # scripts mentioned in the body
-    return (
-        f"Skill {skill.name} root directory: {skill.path.parent}\n\n"
-        f"{body}"
-    )
+    return f"Skill {skill.name} root directory: {skill.path.parent}\n\n{body}"
 
 
 def load_skill(name: str) -> str:

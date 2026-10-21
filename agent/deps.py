@@ -2,16 +2,15 @@
 Composite agent dependencies: encapsulates ReadFileState (for file tools) and
 TasksStore (for task tools) into a single container for unified injection via RunContext.
 """
+
 from dataclasses import dataclass
 from pathlib import Path
 
+from state.file_history import FileHistory
+from state.jobs import Job, JobRegistry
 from state.tasks import TasksStore
 
 from .file_state import ReadFileState
-
-from state.file_history import FileHistory
-
-from state.jobs import Job, JobRegistry
 
 
 @dataclass

@@ -1,32 +1,32 @@
 import difflib
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Optional
 
 import questionary
 from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.formatted_text import FormattedText
-from pydantic_ai import BinaryContent
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+from pydantic_ai import BinaryContent
 from rich.markdown import Heading, Markdown
 from rich.markup import escape
 from rich.padding import Padding
 
-from media import images
+from agent import ReadFileState, compact, subagents
+from core.console import console, print_step
 from integrations import mcp as mcp_servers
+from media import images
+from memory import background, store
 from security import permissions
 from state import sessions as session
-from agent import ReadFileState, compact, subagents
 from state.file_history import FileHistory
 from state.jobs import JobRegistry
-from memory import background, store
 from state.tasks import TasksStore
-from core.console import console, print_step, print_welcome_banner
 
 
 class LeftAlignedHeading(Heading):
@@ -34,6 +34,7 @@ class LeftAlignedHeading(Heading):
     rich centers Markdown headings by default, which looks misaligned in a wide
     terminal; override it to align left instead.
     """
+
     def __rich_console__(self, console, options):
         text = self.text
         text.justify = "left"
@@ -50,6 +51,7 @@ class SessionState:
     Session state shared across commands; the main loop passes it to every command
     handler.
     """
+
     history: list = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
@@ -109,7 +111,7 @@ def _full(text) -> str:
     return escape(str(text).strip())
 
 
-def _format_part_line(part) -> Optional[str]:
+def _format_part_line(part) -> str | None:
     """
     Format a single part of a message as a string carrying Rich markup.
     Layout: icon + role label on their own line, content on the next line, with no
@@ -160,7 +162,7 @@ def print_assistant_markdown(content: str) -> None:
 _PREVIEW_MAX_LINES = 8
 
 
-def _preview_numbered(content: str) -> Optional[str]:
+def _preview_numbered(content: str) -> str | None:
     """
     Add green line numbers and truncate into a preview; used to display the content
     written by write_file.
@@ -273,11 +275,13 @@ def print_agent_steps(new_messages) -> None:
 
 
 def cmd_exit(state: SessionState) -> bool:
+    """Print a farewell; returning False makes the main loop exit."""
     console.print("Bye 👋")
     return False
 
 
 def cmd_help(state: SessionState) -> bool:
+    """List every slash command with its description."""
     console.print("Available commands:")
     for cmd in COMMANDS.values():
         console.print(f"  /{cmd.name:<10} {cmd.description}")
@@ -351,12 +355,8 @@ def _recount_tokens(state: SessionState) -> None:
     response carries usage. Called wherever the history is replaced wholesale
     (/resume restoring it, /rewind truncating it).
     """
-    state.input_tokens = sum(
-        m.usage.input_tokens for m in state.history if m.kind == "response"
-    )
-    state.output_tokens = sum(
-        m.usage.output_tokens for m in state.history if m.kind == "response"
-    )
+    state.input_tokens = sum(m.usage.input_tokens for m in state.history if m.kind == "response")
+    state.output_tokens = sum(m.usage.output_tokens for m in state.history if m.kind == "response")
 
 
 async def cmd_resume(state: SessionState) -> bool:
@@ -426,15 +426,17 @@ async def cmd_resume(state: SessionState) -> bool:
 
 # Rewind picker colors: current entry highlighted blue, descriptions and footer
 # muted, added/removed line counts green/red
-_PICKER_STYLE = Style.from_dict({
-    "question": "bold",
-    "label-current": "#3b82f6 bold",
-    "label": "",
-    "desc": "#6b7280",
-    "plus": "#10b981",
-    "minus": "#ef4444",
-    "footer": "#6b7280",
-})
+_PICKER_STYLE = Style.from_dict(
+    {
+        "question": "bold",
+        "label-current": "#3b82f6 bold",
+        "label": "",
+        "desc": "#6b7280",
+        "plus": "#10b981",
+        "minus": "#ef4444",
+        "footer": "#6b7280",
+    }
+)
 
 
 class _ListPicker:
@@ -465,7 +467,7 @@ class _ListPicker:
     def _render_options(self):
         lines: list[tuple[str, str]] = []
         for i, (_value, label, desc) in enumerate(self.options):
-            is_cursor = (i == self.cursor)
+            is_cursor = i == self.cursor
             pointer = "❯" if is_cursor else " "
             cls_label = "class:label-current" if is_cursor else "class:label"
             lines.append((cls_label, f" {pointer}  {i + 1}. {label}"))
@@ -508,14 +510,22 @@ class _ListPicker:
 
         windows = [
             Window(FormattedTextControl(self._render_question), height=1, always_hide_cursor=True),
-            Window(FormattedTextControl(self._render_options), dont_extend_height=True, always_hide_cursor=True),
+            Window(
+                FormattedTextControl(self._render_options),
+                dont_extend_height=True,
+                always_hide_cursor=True,
+            ),
             Window(FormattedTextControl(self._render_footer), height=1, always_hide_cursor=True),
         ]
         if self.header:
-            windows.insert(1, Window(
-                FormattedTextControl(self._render_header),
-                dont_extend_height=True, always_hide_cursor=True,
-            ))
+            windows.insert(
+                1,
+                Window(
+                    FormattedTextControl(self._render_header),
+                    dont_extend_height=True,
+                    always_hide_cursor=True,
+                ),
+            )
         layout = Layout(HSplit(windows))
         return Application(
             layout=layout,
@@ -553,10 +563,7 @@ def _changes_headline(changes) -> tuple:
     """
     plus = sum(c.insertions for c in changes)
     minus = sum(c.deletions for c in changes)
-    if len(changes) == 1:
-        name = os.path.basename(changes[0].path)
-    else:
-        name = f"{len(changes)} files"
+    name = os.path.basename(changes[0].path) if len(changes) == 1 else f"{len(changes)} files"
     return name, plus, minus
 
 
@@ -582,15 +589,16 @@ async def cmd_rewind(state: SessionState) -> bool:
     """
     fh = state.file_history
     if fh is None or not fh.checkpoints:
-        console.print("(No checkpoints to rewind to; one is created automatically each time a message is sent)\n")
+        console.print(
+            "(No checkpoints to rewind to; one is created automatically each time a message is sent)\n"
+        )
         return True
 
     # Checkpoints listed newest first, each annotated with the change volume produced
     # by that turn
     cps = list(reversed(fh.checkpoints))
     options = [
-        (i, _one_line(s.prompt), _changes_fragments(fh.turn_stats(s)))
-        for i, s in enumerate(cps)
+        (i, _one_line(s.prompt), _changes_fragments(fh.turn_stats(s))) for i, s in enumerate(cps)
     ]
     async with in_terminal():
         picked = await _ListPicker("Rewind to before which message:", options).run()
@@ -623,7 +631,12 @@ async def cmd_rewind(state: SessionState) -> bool:
     else:
         header.append(("class:desc", "No code changes\n"))
     if skipped:
-        header.append(("class:desc", f"  │ {len(skipped)} file(s) changed outside the agent will be left untouched:\n"))
+        header.append(
+            (
+                "class:desc",
+                f"  │ {len(skipped)} file(s) changed outside the agent will be left untouched:\n",
+            )
+        )
         for path in skipped[:5]:
             header.append(("class:desc", f"  │   {os.path.basename(path)}\n"))
         if len(skipped) > 5:
@@ -637,7 +650,9 @@ async def cmd_rewind(state: SessionState) -> bool:
         (None, "Cancel", None),
     ]
     async with in_terminal():
-        channel = await _ListPicker("Will rewind to before you sent this message:", channel_options, header=header).run()
+        channel = await _ListPicker(
+            "Will rewind to before you sent this message:", channel_options, header=header
+        ).run()
     if channel is None:
         return True
 
@@ -674,21 +689,28 @@ async def cmd_rewind(state: SessionState) -> bool:
     if skipped:
         names = ", ".join(os.path.basename(p) for p in skipped[:5])
         more = f" and {len(skipped) - 5} more" if len(skipped) > 5 else ""
-        console.print(f"[yellow]Kept {len(skipped)} file(s) changed outside the agent: {names}{more}[/]")
+        console.print(
+            f"[yellow]Kept {len(skipped)} file(s) changed outside the agent: {names}{more}[/]"
+        )
     console.print()
     return True
 
 
 def cmd_status(state: SessionState) -> bool:
+    """Show the model, permission mode, history size and context usage."""
     console.print(f"Model:            {state.model_name}")
     console.print(f"Permission mode:  {permissions.state.mode}")
     console.print(f"History messages: {len(state.history)}")
     used = compact.context_tokens(state.history)
     threshold = compact.compact_threshold()
     if used:
-        console.print(f"Context (est.):   {used:,} / {threshold:,} tokens ({used * 100 // threshold}%)")
+        console.print(
+            f"Context (est.):   {used:,} / {threshold:,} tokens ({used * 100 // threshold}%)"
+        )
     else:
-        console.print(f"Context (est.):   no data yet (auto-compaction threshold {threshold:,} tokens)")
+        console.print(
+            f"Context (est.):   no data yet (auto-compaction threshold {threshold:,} tokens)"
+        )
     console.print(f"Input tokens:     {state.input_tokens}")
     console.print(f"Output tokens:    {state.output_tokens}\n")
     return True
@@ -776,7 +798,9 @@ def cmd_mcp(state: SessionState) -> bool:
     Show connection status and tool inventory for every configured MCP server.
     """
     if not mcp_servers.RECORDS:
-        console.print(f"No MCP servers configured. Add them to .mcp.json in the project root or to {mcp_servers.USER_CONFIG}.\n")
+        console.print(
+            f"No MCP servers configured. Add them to .mcp.json in the project root or to {mcp_servers.USER_CONFIG}.\n"
+        )
         return True
     for record in mcp_servers.RECORDS:
         console.print(f"[bold]{record.name}[/]  [dim]{escape(record.transport)}[/]")
@@ -822,13 +846,17 @@ COMMANDS = {
     "new": Command("new", "start a new session", cmd_new),
     "resume": Command("resume", "resume a past session", cmd_resume),
     "rewind": Command("rewind", "rewind to an earlier checkpoint", cmd_rewind),
-    "compact": Command("compact", "compact the context (accepts extra instructions)", cmd_compact, takes_args=True),
+    "compact": Command(
+        "compact", "compact the context (accepts extra instructions)", cmd_compact, takes_args=True
+    ),
     "status": Command("status", "show the current session state", cmd_status),
     "memory": Command("memory", "view long-term memory", cmd_memory),
     "dream": Command("dream", "consolidate long-term memory now", cmd_dream),
     "mcp": Command("mcp", "show MCP server status and tools", cmd_mcp),
     "jobs": Command("jobs", "list background jobs", cmd_jobs),
-    "api-detail": Command("api-detail", "show model API call details for the last round", cmd_api_detail),
+    "api-detail": Command(
+        "api-detail", "show model API call details for the last round", cmd_api_detail
+    ),
     "help": Command("help", "list available commands", cmd_help),
     "agents": Command("agents", "list the sub agent types available to run_agent", cmd_agents),
     "exit": Command("exit", "quit the program", cmd_exit),

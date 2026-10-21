@@ -2,6 +2,7 @@
 Model configuration shared by the main agent wiring (core.py) and the sub agent module
 (subagents.py), so neither has to import the other.
 """
+
 import os
 
 from pydantic_ai.models.openai import OpenAIChatModel

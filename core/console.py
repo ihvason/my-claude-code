@@ -4,11 +4,11 @@ and depending only on rich. They live here to break the circular dependency
 between commands and permissions/hooks, so callers can import them at the top of
 a file.
 """
+
 from rich.console import Console
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.text import Text
-
 
 # Shared Console instance; handles ANSI colors across platforms (so even old
 # Windows terminals render correctly).

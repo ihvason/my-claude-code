@@ -16,6 +16,7 @@ checkpoint metadata is persisted in checkpoints.json, so checkpoints taken befor
 /resume remain usable afterwards. Files changed by run_command are out of scope for
 tracking.
 """
+
 import difflib
 import hashlib
 import json
@@ -33,6 +34,7 @@ class Checkpoint:
     """
     A single checkpoint, created before the user input enters the conversation history.
     """
+
     # Conversation history length at checkpoint time; rewinding truncates back to this index
     history_index: int
     # Raw user input, refilled into the input box after rewinding; truncated for list display
@@ -50,6 +52,7 @@ class FileChange:
     """
     A single file change: path, what happened, and the line count delta.
     """
+
     path: str
     # In a rewind plan: restore (restore the target version) or delete (target version absent, so remove the file).
     # In per-turn change stats: create / edit / delete
@@ -124,8 +127,7 @@ class FileHistory:
         silently discarding that work.
         """
         return {
-            path for path, expected in self.known.items()
-            if self._hash_current(path) != expected
+            path for path, expected in self.known.items() if self._hash_current(path) != expected
         }
 
     def make_checkpoint(self, history_index: int, prompt: str, tasks: dict | None = None) -> None:
@@ -141,9 +143,7 @@ class FileHistory:
             if self._current(path) != self._read_version(path, latest):
                 names.append(self._backup(path, latest + 1))
             backups[path] = len(names)
-        self.checkpoints.append(
-            Checkpoint(history_index, prompt, time.time(), backups, tasks)
-        )
+        self.checkpoints.append(Checkpoint(history_index, prompt, time.time(), backups, tasks))
         self._save()
 
     # —— Rewind ——

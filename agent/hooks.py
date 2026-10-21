@@ -5,13 +5,14 @@ Hooks attached to the Agent:
 3. Automatic retries on API request failures (wrap_model_request)
 4. Graceful fallback for unhandled tool execution errors (on_tool_execute_error)
 """
+
 import asyncio
 import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_ai.capabilities import Hooks
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
 from core.console import console, print_step
@@ -19,7 +20,6 @@ from security import classifier, permissions
 
 from . import plan_mode
 from .reminders import build_job_notifications, build_reminder_text, build_task_reminder_text
-
 
 MAX_RETRIES = 3
 
@@ -39,6 +39,7 @@ class ApiCall:
     Metadata for a single model API call.
     Request fields are populated by before_model_request; response fields by after_model_request.
     """
+
     # Request side
     model: str
     messages_count: int
@@ -60,6 +61,7 @@ hooks = Hooks()
 
 # ---------- API Call Logging ----------
 
+
 @hooks.on.before_model_request
 async def _record_request(ctx, request_context):
     """
@@ -71,12 +73,14 @@ async def _record_request(ctx, request_context):
         tool_names = [t.name for t in request_context.model_request_parameters.function_tools]
     except AttributeError:
         tool_names = []
-    api_call_log.append(ApiCall(
-        model=request_context.model.model_name,
-        messages_count=len(msgs),
-        last_part=last_part,
-        tools=tool_names,
-    ))
+    api_call_log.append(
+        ApiCall(
+            model=request_context.model.model_name,
+            messages_count=len(msgs),
+            last_part=last_part,
+            tools=tool_names,
+        )
+    )
     return request_context
 
 
@@ -95,6 +99,7 @@ async def _record_response(ctx, *, request_context, response):
 
 
 # ---------- System-Reminder Injection ----------
+
 
 def _scan_task_turn_counters(messages) -> tuple[int, int]:
     """
@@ -119,7 +124,11 @@ def _scan_task_turn_counters(messages) -> tuple[int, int]:
                 since_reminder += 1
         elif isinstance(msg, ModelRequest) and not found_reminder:
             for part in msg.parts:
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str) and _REMINDER_SENTINELS["task"] in part.content:
+                if (
+                    isinstance(part, UserPromptPart)
+                    and isinstance(part.content, str)
+                    and _REMINDER_SENTINELS["task"] in part.content
+                ):
                     found_reminder = True
                     break
         if found_mgmt and found_reminder:
@@ -147,6 +156,7 @@ def _build_job_reminder(ctx, messages) -> str | None:
     # model request
     return build_job_notifications(ctx.deps.job_registry)
 
+
 def _build_plan_reminder(ctx, messages) -> str | None:
     return plan_mode.build_plan_reminder(messages, ctx.deps.plan_file)
 
@@ -157,7 +167,12 @@ _REMINDER_SENTINELS = {
     # Task reminder sentinel matches the static phrase guaranteed by the reminder builder
     "task": "The task tools haven't been used recently",
 }
-_REMINDER_BUILDERS = (_build_plan_reminder, _build_file_reminder, _build_task_reminder, _build_job_reminder)
+_REMINDER_BUILDERS = (
+    _build_plan_reminder,
+    _build_file_reminder,
+    _build_task_reminder,
+    _build_job_reminder,
+)
 
 
 @hooks.on.before_model_request
@@ -175,7 +190,9 @@ async def _inject_reminders(ctx, request_context):
             text = builder(ctx, messages + appended)
         except Exception as e:
             # One broken reminder must not fail the whole model request
-            console.print(f"[yellow]Reminder {builder.__name__} failed: {type(e).__name__}: {e}[/]\n")
+            console.print(
+                f"[yellow]Reminder {builder.__name__} failed: {type(e).__name__}: {e}[/]\n"
+            )
             continue
         if text is None:
             continue
@@ -187,6 +204,7 @@ async def _inject_reminders(ctx, request_context):
 
 
 # ---------- API Request Retries ----------
+
 
 @hooks.on.model_request
 async def _retry_on_error(ctx, *, request_context, handler):
@@ -203,21 +221,23 @@ async def _retry_on_error(ctx, *, request_context, handler):
             if e.status_code < 500:
                 raise
             if attempt >= MAX_RETRIES:
-                console.print(f"[bold red]✗ HTTP {e.status_code}: failed after {MAX_RETRIES} retries[/]")
+                console.print(
+                    f"[bold red]✗ HTTP {e.status_code}: failed after {MAX_RETRIES} retries[/]"
+                )
                 raise
-            wait = 2 ** attempt
+            wait = 2**attempt
             console.print(
                 f"[bold yellow]⟳ HTTP {e.status_code}: retrying in {wait}s "
                 f"({attempt + 1}/{MAX_RETRIES})...[/]"
             )
             await asyncio.sleep(wait)
-        except ModelAPIError as e:
+        except ModelAPIError:
             if attempt >= MAX_RETRIES:
                 console.print(
                     f"[bold red]✗ Network connection failed after {MAX_RETRIES} retries[/]"
                 )
                 raise
-            wait = 2 ** attempt
+            wait = 2**attempt
             console.print(
                 f"[bold yellow]⟳ Network connection failed: retrying in {wait}s "
                 f"({attempt + 1}/{MAX_RETRIES})...[/]"
@@ -226,6 +246,7 @@ async def _retry_on_error(ctx, *, request_context, handler):
 
 
 # ---------- Tool Execution Permission Checks ----------
+
 
 @hooks.on.tool_execute
 async def _check_permission(ctx, *, call, tool_def, args, handler):
@@ -252,7 +273,9 @@ async def _check_permission(ctx, *, call, tool_def, args, handler):
     # decision == "ask" in AUTO mode: delegate decision-making to the classifier
     if permissions.state.mode == permissions.AUTO:
         # Align review status with thinking and tool_call visual styles: dedicated icon/label line with indented body
-        print_step("[blue]◆ auto_check[/]", f"[blue dim]Reviewing {call.tool_name} with classifier...[/]")
+        print_step(
+            "[blue]◆ auto_check[/]", f"[blue dim]Reviewing {call.tool_name} with classifier...[/]"
+        )
         verdict = await classifier.classify(ctx.messages, call.tool_name, args)
 
         if verdict.get("error"):
@@ -284,6 +307,7 @@ async def _check_permission(ctx, *, call, tool_def, args, handler):
 
 
 # ---------- Tool Execution Error Handling ----------
+
 
 @hooks.on.tool_execute_error
 async def _handle_tool_error(ctx, *, call, tool_def, args, error):

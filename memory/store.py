@@ -2,6 +2,7 @@
 File-based long-term memory storage: each memory is a markdown file carrying
 frontmatter, and MEMORY.md is their flat index.
 """
+
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,10 +33,12 @@ def memory_dir() -> Path:
 
 
 def index_path() -> Path:
+    """Path of the MEMORY.md index."""
     return memory_dir() / "MEMORY.md"
 
 
 def ensure_memory_dir() -> None:
+    """Create the memory directory if it does not exist yet."""
     # Create the directory at startup so the system prompt can tell the model it
     # already exists and must not mkdir it
     memory_dir().mkdir(parents=True, exist_ok=True)
@@ -47,6 +50,7 @@ class MemoryHeader:
     Metadata for a single memory file, parsed from its frontmatter; recall judges
     relevance from this alone without reading the body.
     """
+
     filename: str
     path: Path
     mtime: float
@@ -92,14 +96,16 @@ def scan_memory_files() -> list[MemoryHeader]:
         if path.stat().st_size == 0:
             continue
         fields = _parse_frontmatter(path)
-        headers.append(MemoryHeader(
-            filename=path.name,
-            path=path,
-            mtime=path.stat().st_mtime,
-            name=fields.get("name", path.stem),
-            description=fields.get("description", ""),
-            type=fields.get("type", ""),
-        ))
+        headers.append(
+            MemoryHeader(
+                filename=path.name,
+                path=path,
+                mtime=path.stat().st_mtime,
+                name=fields.get("name", path.stem),
+                description=fields.get("description", ""),
+                type=fields.get("type", ""),
+            )
+        )
     headers.sort(key=lambda h: h.mtime, reverse=True)
     return headers
 
@@ -152,16 +158,20 @@ def read_index() -> str | None:
     if not content.strip():
         return None
     return truncate_content(
-        content, MAX_INDEX_LINES, MAX_INDEX_BYTES,
+        content,
+        MAX_INDEX_LINES,
+        MAX_INDEX_BYTES,
         "Warning: MEMORY.md exceeds the limit (200 lines / 25KB), so only part of it was loaded. Keep the index to one line per memory and move details into memory files.",
     )
 
 
 def age_days(mtime: float) -> int:
+    """Whole days elapsed since the given mtime, never negative."""
     return max(0, int((time.time() - mtime) // 86400))
 
 
 def age_text(days: int) -> str:
+    """Describe freshness in words: today / yesterday / N days ago."""
     # Describe freshness in natural language ("today" / "yesterday" / "N days ago");
     # the model is far more sensitive to relative days than to date arithmetic
     if days == 0:

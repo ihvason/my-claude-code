@@ -7,6 +7,7 @@ External code only needs:
 - read_and_register: reused by mentions.py to inject @ references into the
   conversation history disguised as read_file calls
 """
+
 from pydantic_ai import Tool
 
 from ..skills import load_skill
@@ -18,7 +19,7 @@ from ..skills import load_skill
 from . import shell as _shell  # noqa: F401
 from .agents import run_agent
 from .ask_user import ask_user_question
-from .file import read_and_register, read_file, edit_file, write_file
+from .file import edit_file, read_and_register, read_file, write_file
 from .monitor import monitor
 from .plan import enter_plan_mode, exit_plan_mode
 from .shell import job_kill, run_command

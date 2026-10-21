@@ -5,6 +5,7 @@ Maintains a persistent bottom input bar while streaming agent output above via
 patch_stdout. Supports real-time execution cancellation (Esc / Ctrl+C), command
 history, dynamic spinners, and cycling permission modes via Shift+Tab.
 """
+
 import asyncio
 import platform
 import re
@@ -18,7 +19,13 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
@@ -26,10 +33,10 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.markup import escape
 
-from security import permissions
+from core.console import console, print_system_text
 from media import images
 from media.mentions import list_candidate_files
-from core.console import console, print_system_text
+from security import permissions
 
 # Persistent input area: remains pinned to the bottom throughout the session.
 # Agent output streams above via patch_stdout; requests can be interrupted immediately via ESC / Ctrl+C.
@@ -54,6 +61,7 @@ class AtFileCompleter(Completer):
     """
     Autocompletes @ file references: yields matching paths when typing an @token.
     """
+
     def get_completions(self, document, complete_event):
         # Inspect text before cursor to capture active @token (non-whitespace following @)
         match = re.search(r"@(\S*)$", document.text_before_cursor)
@@ -158,7 +166,9 @@ class Repl:
         hint = ""
         if self.state.job_registry.running(background=False):
             hint = " · ctrl+b to background"
-        return HTML(f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · esc to cancel{hint})</ansibrightblack>")
+        return HTML(
+            f"<ansigreen>{frame}</ansigreen> <b>Working…</b><ansibrightblack>({elapsed}s elapsed · esc to cancel{hint})</ansibrightblack>"
+        )
 
     def _mode_line(self):
         # Line under the input box: current permission mode and switch hint, plus a
@@ -350,7 +360,7 @@ class Repl:
             selected = state.completions[0]
         document = self._buffer.document
         start = document.cursor_position + selected.start_position
-        if document.text[start:document.cursor_position] == selected.text:
+        if document.text[start : document.cursor_position] == selected.text:
             # Applying it would change nothing, so this Enter means "submit"
             return False
         self._buffer.apply_completion(selected)
@@ -408,14 +418,16 @@ class Repl:
                 self.prefill(self.state.pending_input)
                 self.state.pending_input = ""
             self.app.invalidate()
-            
+
     def start_working(self):
+        """Show the working spinner until the turn finishes or is cancelled."""
         # Set working state to display spinner; cleared in _process.finally on completion or cancellation
         self.working = True
         self._work_start = time.monotonic()
         self.app.invalidate()
 
     def prefill(self, text: str) -> None:
+        """Put text back into the input line, ready to edit and resend."""
         # Put text back into the input buffer with the cursor at the end, ready to edit and
         # resend; used after /rewind rolls the conversation back. Image placeholders are
         # stripped because the attachments themselves cannot be restored.
@@ -425,11 +437,13 @@ class Repl:
         self.app.invalidate()
 
     def exit(self):
+        """Shut down the persistent input area (used by /exit)."""
         # Shut down persistent input area (used by /exit)
         self.app.exit()
 
     @property
     def is_idle(self):
+        """Whether no turn is currently running."""
         return self._task is None
 
     def submit_system(self, text) -> None:
@@ -441,6 +455,7 @@ class Repl:
         self._task = self.app.create_background_task(self._process(text, self._on_system))
 
     async def run(self, on_submit, on_system):
+        """Run the REPL until exit, wiring the submit and system-turn callbacks."""
         # Run REPL event loop until exited; on_submit is the async handler for input lines
         self._on_submit = on_submit
         self._on_system = on_system

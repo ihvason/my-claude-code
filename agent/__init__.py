@@ -10,9 +10,10 @@ External code only needs:
 The submodules (tools / hooks / core) are implementation details and do not need
 to be imported directly.
 """
+
 from .core import agent
 from .file_state import ReadFileState
-from .hooks import api_call_log, ApiCall
+from .hooks import ApiCall, api_call_log
 from .model import MODEL_NAME
 
-__all__ = ["agent", "MODEL_NAME", "api_call_log", "ApiCall", "ReadFileState"]
+__all__ = ["MODEL_NAME", "ApiCall", "ReadFileState", "agent", "api_call_log"]

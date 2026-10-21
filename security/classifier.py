@@ -5,11 +5,11 @@ a tool call can be automatically approved.
 Projects the conversation into a sanitized transcript and evaluates it alongside
 the pending tool invocation via a sidecar LLM to return an "allow or block" verdict.
 """
+
 import json
 import os
 
 from openai import AsyncOpenAI
-
 
 # Shares model and API key with the main loop, but dispatches standalone requests outside the agent framework
 _client = AsyncOpenAI(
@@ -75,9 +75,7 @@ def build_transcript(messages, tool_name: str, args: dict) -> str:
                 call_args = {k: _shorten(v) for k, v in part.args_as_dict().items()}
                 lines.append(json.dumps({part.tool_name: call_args}, ensure_ascii=False))
     # Append the pending tool call to the transcript, deduplicating if already present at the tail
-    pending = json.dumps(
-        {tool_name: {k: _shorten(v) for k, v in args.items()}}, ensure_ascii=False
-    )
+    pending = json.dumps({tool_name: {k: _shorten(v) for k, v in args.items()}}, ensure_ascii=False)
     if lines and lines[-1] == pending:
         lines.pop()
     lines.append(pending)

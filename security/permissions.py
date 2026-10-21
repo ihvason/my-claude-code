@@ -1,6 +1,7 @@
 """
 Permission control: Evaluates whether to allow, prompt, or deny a tool call before execution.
 """
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,9 +15,8 @@ from prompt_toolkit.styles import Style
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from memory import store
 from core.console import console
-
+from memory import store
 
 # Permission modes
 # default: Requires approval for file writes and shell commands; auto-allows read-only operations
@@ -34,7 +34,15 @@ PLAN = "plan"
 # Order in which Shift+Tab cycles the permission modes; plan comes right after acceptEdits
 MODES = [DEFAULT, ACCEPT_EDITS, PLAN, AUTO, BYPASS]
 
-READONLY_TOOLS = {"read_file", "ask_user_question", "task_create", "task_list", "task_get", "task_update", "job_kill"}
+READONLY_TOOLS = {
+    "read_file",
+    "ask_user_question",
+    "task_create",
+    "task_list",
+    "task_get",
+    "task_update",
+    "job_kill",
+}
 
 # File modification tools: Auto-allowed in acceptEdits mode
 EDIT_TOOLS = {"write_file", "edit_file"}
@@ -42,7 +50,12 @@ EDIT_TOOLS = {"write_file", "edit_file"}
 # Allowed in plan mode besides read-only tools: the plan workflow itself relies on them
 # (dispatching read-only sub agents, loading a skill) and exit_plan_mode opens its own
 # approval picker
-PLAN_ALLOWED_TOOLS = READONLY_TOOLS | {"run_agent", "load_skill", "enter_plan_mode", "exit_plan_mode"}
+PLAN_ALLOWED_TOOLS = READONLY_TOOLS | {
+    "run_agent",
+    "load_skill",
+    "enter_plan_mode",
+    "exit_plan_mode",
+}
 
 # Tool self-check registry: Evaluates arguments for fine-grained semantic risk control
 TOOL_SELF_CHECKS = {}
@@ -63,6 +76,7 @@ class PermissionState:
     - Mode is process-wide: persists across /new and /resume; resets on restart.
     - Allowlist is session-scoped: clears when switching sessions via /new or /resume.
     """
+
     mode: str = DEFAULT
     # Mode to restore once the plan is approved
     pre_plan_mode: str = DEFAULT
@@ -95,7 +109,7 @@ def compute_decision(tool_name: str, args: dict, plan_file: Path | None = None) 
         # Read-only tools, the plan workflow's own tools, and calls the self-check proved safe
         # (ls, grep and the like) are allowed; everything else asks every time
         return "allow" if tool_name in PLAN_ALLOWED_TOOLS or verdict == "allow" else "ask"
-    
+
     if verdict:
         return verdict
     # Session allowlist check
@@ -122,6 +136,7 @@ def _is_same_file(path: str, target: Path) -> bool:
 
 
 def set_mode(mode: str) -> None:
+    """Switch the permission mode, remembering the previous one for plan approval."""
     # Remember the previous mode when entering plan mode, so approval can restore it
     if mode == PLAN and state.mode != PLAN:
         state.pre_plan_mode = state.mode
@@ -145,6 +160,7 @@ def _format_call(tool_name: str, args: dict) -> str:
     """
     Formats a tool invocation for approval preview, e.g. run_command(command=npm test).
     """
+
     def show(key, value):
         text = " ".join(str(value).split())
         if key in BULKY_ARGS and len(text) > 60:
@@ -155,12 +171,14 @@ def _format_call(tool_name: str, args: dict) -> str:
     return f"{tool_name}({inner})"
 
 
-_STYLE = Style.from_dict({
-    "question": "bold",
-    "label-current": "#3b82f6 bold",
-    "label": "",
-    "footer": "#6b7280",
-})
+_STYLE = Style.from_dict(
+    {
+        "question": "bold",
+        "label-current": "#3b82f6 bold",
+        "label": "",
+        "footer": "#6b7280",
+    }
+)
 
 
 class _ApprovalPicker:
@@ -181,7 +199,7 @@ class _ApprovalPicker:
     def _render_options(self):
         lines: list[tuple[str, str]] = []
         for i, (_value, label) in enumerate(self.options):
-            is_cursor = (i == self.cursor)
+            is_cursor = i == self.cursor
             pointer = "❯" if is_cursor else " "
             cls_label = "class:label-current" if is_cursor else "class:label"
             lines.append((cls_label, f" {pointer}  {i + 1}. {label}"))
@@ -219,11 +237,26 @@ class _ApprovalPicker:
             self.app.exit()
 
         # always_hide_cursor prevents the terminal cursor from overlapping the prompt text
-        layout = Layout(HSplit([
-            Window(FormattedTextControl(self._render_question), wrap_lines=True, dont_extend_height=True, always_hide_cursor=True),
-            Window(FormattedTextControl(self._render_options), dont_extend_height=True, always_hide_cursor=True),
-            Window(FormattedTextControl(self._render_footer), height=1, always_hide_cursor=True),
-        ]))
+        layout = Layout(
+            HSplit(
+                [
+                    Window(
+                        FormattedTextControl(self._render_question),
+                        wrap_lines=True,
+                        dont_extend_height=True,
+                        always_hide_cursor=True,
+                    ),
+                    Window(
+                        FormattedTextControl(self._render_options),
+                        dont_extend_height=True,
+                        always_hide_cursor=True,
+                    ),
+                    Window(
+                        FormattedTextControl(self._render_footer), height=1, always_hide_cursor=True
+                    ),
+                ]
+            )
+        )
         return Application(
             layout=layout,
             key_bindings=kb,
@@ -268,5 +301,7 @@ async def prompt_plan_approval(plan: str, plan_file: Path) -> tuple[str, str]:
         console.print(Panel(Markdown(plan), title=str(plan_file), border_style="magenta"))
         choice = await _ApprovalPicker("Approve this plan and start implementing?", options).run()
         if choice == "keep":
-            feedback = await PromptSession().prompt_async("Tell the model what to change (press Enter to skip): ")
+            feedback = await PromptSession().prompt_async(
+                "Tell the model what to change (press Enter to skip): "
+            )
     return choice, feedback.strip()

@@ -4,6 +4,7 @@ and injects mock read_file tool invocations into the conversation history.
 This convinces the model that the referenced files have already been read, satisfying
 read-before-write checks and enabling immediate edits.
 """
+
 import os
 import re
 import subprocess
@@ -16,9 +17,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from media import images
 from agent.file_state import ReadFileState
 from agent.tools import read_and_register
+from media import images
 
 # Matches @ mentions: requires preceding start-of-line or whitespace to avoid false positives (e.g., foo@bar.com).
 # Captures standard path characters (letters, digits, underscores, dots, slashes, backslashes, hyphens, tildes),
@@ -39,9 +40,7 @@ def extract_at_mentions(text: str) -> list[str]:
     return seen
 
 
-def build_mention_messages(
-    paths: list[str], state: ReadFileState
-) -> tuple[list, list, list[str]]:
+def build_mention_messages(paths: list[str], state: ReadFileState) -> tuple[list, list, list[str]]:
     """
     Read every @-mentioned path; text files become a synthetic read_file call/return pair.
     read_and_register records them in readFileState exactly like a real read_file call, so a
@@ -80,13 +79,19 @@ def build_mention_messages(
         # An assistant message pretending the model issued the read_file call itself
         messages.append(
             ModelResponse(
-                parts=[ToolCallPart(tool_name="read_file", args={"path": abs_path}, tool_call_id=call_id)]
+                parts=[
+                    ToolCallPart(
+                        tool_name="read_file", args={"path": abs_path}, tool_call_id=call_id
+                    )
+                ]
             )
         )
         # A tool return holding the numbered file body, identical to a real read_file result
         messages.append(
             ModelRequest(
-                parts=[ToolReturnPart(tool_name="read_file", content=numbered, tool_call_id=call_id)]
+                parts=[
+                    ToolReturnPart(tool_name="read_file", content=numbered, tool_call_id=call_id)
+                ]
             )
         )
     return messages, attachments, image_paths

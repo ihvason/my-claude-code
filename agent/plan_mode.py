@@ -2,12 +2,13 @@
 Plan mode: where the plan file lives, plus the system reminders that keep the model's belief
 about the current mode in sync with the real one.
 """
+
 from pathlib import Path
 
 from pydantic_ai.messages import ModelResponse, UserPromptPart
 
-from security import permissions
 from core.paths import get_session_dir
+from security import permissions
 
 # After the last plan reminder, send the short version once every this many requests
 PLAN_REMINDER_TURNS_BETWEEN = 5
@@ -28,10 +29,12 @@ def plans_dir(session_id: str) -> Path:
 
 
 def plan_file_path(session_id: str) -> Path:
+    """Path of the plan file for a session."""
     return plans_dir(session_id) / "plan.md"
 
 
 def ensure_plans_dir(session_id: str) -> None:
+    """Create the session's plans directory if it does not exist yet."""
     # The reminder tells the model to write the plan file directly, so the directory has
     # to exist up front
     plans_dir(session_id).mkdir(parents=True, exist_ok=True)
@@ -42,6 +45,7 @@ def _wrap(text: str) -> str:
 
 
 def full_reminder(plan_file: Path) -> str:
+    """Full rules for plan mode, including the plan file and the workflow."""
     if plan_file.exists():
         file_info = (
             f"The plan file already exists: {plan_file}. If this continues the same task, "
@@ -67,6 +71,7 @@ def full_reminder(plan_file: Path) -> str:
 
 
 def sparse_reminder(plan_file: Path) -> str:
+    """Short reminder that restates the plan-mode constraints."""
     return _wrap(
         _SENTINELS["sparse"]
         + f" (full rules above). Everything except the plan file ({plan_file}) is read-only. End every turn with ask_user_question or exit_plan_mode; do not ask in plain text whether the plan works."
@@ -74,6 +79,7 @@ def sparse_reminder(plan_file: Path) -> str:
 
 
 def exit_reminder(plan_file: Path) -> str:
+    """Reminder telling the model that plan mode has ended."""
     text = _SENTINELS["exit"] + " You may edit files and run commands again."
     if plan_file.exists():
         text += f" The plan file is at {plan_file}; read it again whenever you need it."
